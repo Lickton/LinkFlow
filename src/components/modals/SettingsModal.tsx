@@ -22,9 +22,9 @@ interface SettingsModalProps {
   isOpen: boolean;
   schemes: UrlScheme[];
   onClose: () => void;
-  onCreate: (input: SchemeDraft) => void;
-  onUpdate: (schemeId: string, patch: SchemeDraft) => void;
-  onDelete: (schemeId: string) => void;
+  onCreate: (input: SchemeDraft) => Promise<void>;
+  onUpdate: (schemeId: string, patch: SchemeDraft) => Promise<void>;
+  onDelete: (schemeId: string) => Promise<void>;
 }
 
 export function SettingsModal({
@@ -38,6 +38,7 @@ export function SettingsModal({
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SchemeDraft>(emptyDraft);
   const [savedNotice, setSavedNotice] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const selectedScheme = useMemo(
     () => schemes.find((scheme) => scheme.id === selectedId),
@@ -75,6 +76,45 @@ export function SettingsModal({
   const isScript = draft.kind === 'script';
   const isPathValid = !isScript || isAbsolutePath(draft.template.trim());
   const isValid = draft.name.trim().length > 0 && draft.template.trim().length > 0 && isPathValid;
+
+  const handleDelete = async () => {
+    if (!selectedId) {
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await onDelete(selectedId);
+      setSelectedId(null);
+      setDraft(emptyDraft);
+      setSavedNotice('已删除动作');
+    } catch (error) {
+      console.error('Failed to delete scheme', error);
+      window.alert('删除动作失败，请稍后重试。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleSave = async () => {
+    if (!isValid) {
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      if (selectedId) {
+        await onUpdate(selectedId, draft);
+        setSavedNotice('已保存修改');
+      } else {
+        await onCreate(draft);
+        setSavedNotice('已创建动作');
+      }
+    } catch (error) {
+      console.error('Failed to save scheme', error);
+      window.alert('保存动作失败，请稍后重试。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   const handleDropPath = (event: DragEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -282,16 +322,8 @@ export function SettingsModal({
           <div className="mt-auto flex items-center justify-between border-t border-gray-100 pt-4">
             <button
               type="button"
-              disabled={!selectedId}
-              onClick={() => {
-                if (!selectedId) {
-                  return;
-                }
-
-                onDelete(selectedId);
-                setSelectedId(null);
-                setDraft(emptyDraft);
-              }}
+              disabled={!selectedId || isSubmitting}
+              onClick={() => void handleDelete()}
               className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-red-500 transition enabled:hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-300"
             >
               <Trash2 size={14} />
@@ -308,23 +340,11 @@ export function SettingsModal({
               </button>
               <button
                 type="button"
-                disabled={!isValid}
-                onClick={() => {
-                  if (!isValid) {
-                    return;
-                  }
-
-                  if (selectedId) {
-                    onUpdate(selectedId, draft);
-                    setSavedNotice('已保存修改');
-                  } else {
-                    onCreate(draft);
-                    setSavedNotice('已创建动作');
-                  }
-                }}
+                disabled={!isValid || isSubmitting}
+                onClick={() => void handleSave()}
                 className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                保存
+                {isSubmitting ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

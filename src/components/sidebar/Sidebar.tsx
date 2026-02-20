@@ -21,7 +21,7 @@ export function Sidebar({
   onOpenSettings,
 }: SidebarProps) {
   return (
-    <aside className="flex w-72 shrink-0 flex-col border-r border-gray-200 bg-gray-50 p-4">
+    <aside className="flex h-full w-full min-w-0 flex-col bg-gray-50 p-4">
       <h1 className="px-2 pb-4 text-xl font-semibold text-gray-800">LinkFlow</h1>
 
       <nav className="flex-1 space-y-1 overflow-y-auto">

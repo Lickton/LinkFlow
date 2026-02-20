@@ -20,6 +20,10 @@ function App() {
     activeListId,
     activeView,
     draftTask,
+    isHydrating,
+    isHydrated,
+    syncError,
+    initFromBackend,
     setActiveList,
     addList,
     setActiveView,
@@ -34,7 +38,21 @@ function App() {
   const [isActionPickerOpen, setIsActionPickerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const [isCreateListOpen, setIsCreateListOpen] = useState(false);
+  const [newListName, setNewListName] = useState('');
+  const [newListIcon, setNewListIcon] = useState('🗂️');
+  const [isCreatingList, setIsCreatingList] = useState(false);
   const executedScriptTaskKeysRef = useRef<Set<string>>(new Set());
+
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    void initFromBackend().catch((error) => {
+      console.error('Failed to load persisted data', error);
+    });
+  }, [initFromBackend]);
 
   const activeList = lists.find((list) => list.id === activeListId);
   const draftActionPreviews = (draftTask.actions ?? [])
@@ -63,13 +81,52 @@ function App() {
   const title = activeView === 'completed' ? '✅ 已完成' : activeList?.name ?? '列表';
 
   const handleCreateList = () => {
-    const name = window.prompt('请输入列表名称');
-    if (!name?.trim()) {
+    setNewListName('');
+    setNewListIcon('🗂️');
+    setIsCreateListOpen(true);
+  };
+
+  const submitCreateList = () => {
+    const name = newListName.trim();
+    if (!name || isCreatingList) {
       return;
     }
 
-    const icon = window.prompt('请输入列表图标（可选）', '🗂️')?.trim() || '🗂️';
-    addList({ name: name.trim(), icon });
+    setIsCreatingList(true);
+    void addList({ name, icon: newListIcon.trim() || '🗂️' })
+      .then(() => {
+        setIsCreateListOpen(false);
+        setNewListName('');
+        setNewListIcon('🗂️');
+      })
+      .catch((error) => {
+      console.error('Failed to create list', error);
+      window.alert('创建列表失败，请稍后重试。');
+      })
+      .finally(() => {
+        setIsCreatingList(false);
+      });
+  };
+
+  const handleSubmitTask = () => {
+    void addTaskFromDraft(activeListId, isAllTasksView).catch((error) => {
+      console.error('Failed to create task', error);
+      window.alert('创建任务失败，请稍后重试。');
+    });
+  };
+
+  const handleToggleCompleted = (taskId: string) => {
+    void toggleTaskCompleted(taskId).catch((error) => {
+      console.error('Failed to toggle task', error);
+      window.alert('更新任务状态失败，请稍后重试。');
+    });
+  };
+
+  const handleUpdateTask = (taskId: string, patch: Partial<Task>) => {
+    void updateTask(taskId, patch).catch((error) => {
+      console.error('Failed to update task', error);
+      window.alert('保存任务失败，请稍后重试。');
+    });
   };
 
   const handleExecuteAction = async (task: Task, actionSchemeId: string) => {
@@ -138,6 +195,48 @@ function App() {
 
     return () => window.clearInterval(timer);
   }, [schemes, tasks]);
+
+  useEffect(() => {
+    if (!isCreateListOpen) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+      setIsCreateListOpen(false);
+      setNewListName('');
+      setNewListIcon('🗂️');
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isCreateListOpen]);
+
+  if (!isTauri()) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-100 p-6 text-sm text-gray-700">
+        请使用 `npm run tauri dev` 或打包后的桌面应用运行，SQLite 后端仅在 Tauri 桌面端可用。
+      </div>
+    );
+  }
+
+  if (isHydrating && !isHydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-100 p-6 text-sm text-gray-700">
+        正在加载本地数据库数据...
+      </div>
+    );
+  }
+
+  if (!isHydrated) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-red-50 p-6 text-sm text-red-700">
+        数据库初始化失败：{syncError ?? '未知错误'}
+      </div>
+    );
+  }
 
   return (
     <>
@@ -243,9 +342,9 @@ function App() {
               })
             }
             onDraftListChange={(value) => updateDraftTask({ listId: value })}
-            onSubmitTask={() => addTaskFromDraft(activeListId, isAllTasksView)}
+            onSubmitTask={handleSubmitTask}
             onOpenActionPicker={() => setIsActionPickerOpen(true)}
-            onToggleCompleted={toggleTaskCompleted}
+            onToggleCompleted={handleToggleCompleted}
             onExecuteAction={handleExecuteAction}
             onEditTask={(task) => setEditingTaskId(task.id)}
           />
@@ -270,8 +369,58 @@ function App() {
         task={editingTask}
         isOpen={Boolean(editingTask)}
         onClose={() => setEditingTaskId(null)}
-        onSave={updateTask}
+        onSave={handleUpdateTask}
       />
+      {isCreateListOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-lg">
+            <h3 className="mb-4 text-lg font-semibold text-gray-800">新建任务列表</h3>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-400">列表名称</span>
+                <input
+                  value={newListName}
+                  onChange={(event) => setNewListName(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      submitCreateList();
+                    }
+                  }}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
+                  placeholder="例如：学习"
+                  autoFocus
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-400">图标（可选）</span>
+                <input
+                  value={newListIcon}
+                  onChange={(event) => setNewListIcon(event.target.value)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
+                  placeholder="🗂️"
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setIsCreateListOpen(false)}
+                className="rounded-lg px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!newListName.trim() || isCreatingList}
+                onClick={submitCreateList}
+                className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isCreatingList ? '创建中...' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </>
   );
 }

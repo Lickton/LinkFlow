@@ -1,6 +1,15 @@
 import { create } from 'zustand';
-import { mockLists, mockSchemes, mockTasks } from './mockData';
 import type { List, RepeatRule, Task, TaskActionBinding, UrlScheme } from '../types/models';
+import {
+  createList as createListInDb,
+  createScheme as createSchemeInDb,
+  createTask as createTaskInDb,
+  deleteScheme as deleteSchemeInDb,
+  getAppSnapshot,
+  saveTask as saveTaskInDb,
+  toggleTaskCompleted as toggleTaskCompletedInDb,
+  updateScheme as updateSchemeInDb,
+} from '../utils/backendApi';
 
 type ActiveView = 'list' | 'completed';
 
@@ -23,15 +32,19 @@ interface AppState {
   activeListId: string;
   activeView: ActiveView;
   draftTask: DraftTask;
+  isHydrating: boolean;
+  isHydrated: boolean;
+  syncError?: string;
+  initFromBackend: () => Promise<void>;
   setActiveList: (listId: string) => void;
-  addList: (input: Omit<List, 'id'>) => void;
+  addList: (input: Omit<List, 'id'>) => Promise<void>;
   setActiveView: (view: ActiveView) => void;
-  toggleTaskCompleted: (taskId: string) => void;
-  updateTask: (taskId: string, patch: Partial<Task>) => void;
-  addTaskFromDraft: (defaultListId: string, useDraftList: boolean) => void;
-  addScheme: (input: Omit<UrlScheme, 'id'>) => void;
-  updateScheme: (schemeId: string, patch: Omit<UrlScheme, 'id'>) => void;
-  deleteScheme: (schemeId: string) => void;
+  toggleTaskCompleted: (taskId: string) => Promise<void>;
+  updateTask: (taskId: string, patch: Partial<Task>) => Promise<void>;
+  addTaskFromDraft: (defaultListId: string, useDraftList: boolean) => Promise<void>;
+  addScheme: (input: Omit<UrlScheme, 'id'>) => Promise<void>;
+  updateScheme: (schemeId: string, patch: Omit<UrlScheme, 'id'>) => Promise<void>;
+  deleteScheme: (schemeId: string) => Promise<void>;
   updateDraftTask: (patch: Partial<DraftTask>) => void;
   resetDraftTask: () => void;
 }
@@ -143,109 +156,138 @@ const inferDefaultSchedule = (
   };
 };
 
-export const useAppStore = create<AppState>((set) => ({
-  lists: mockLists,
-  tasks: mockTasks,
-  schemes: mockSchemes,
-  activeListId: mockLists[0]?.id ?? '',
+export const useAppStore = create<AppState>((set, get) => ({
+  lists: [],
+  tasks: [],
+  schemes: [],
+  activeListId: '',
   activeView: 'list',
   draftTask: initialDraftTask,
+  isHydrating: false,
+  isHydrated: false,
+  syncError: undefined,
+  initFromBackend: async () => {
+    set({ isHydrating: true, syncError: undefined });
+    try {
+      const snapshot = await getAppSnapshot();
+      set((state) => ({
+        lists: snapshot.lists,
+        tasks: snapshot.tasks,
+        schemes: snapshot.schemes,
+        activeListId:
+          state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
+            ? state.activeListId
+            : (snapshot.lists[0]?.id ?? ''),
+        isHydrating: false,
+        isHydrated: true,
+        syncError: undefined,
+      }));
+    } catch (error) {
+      set({
+        isHydrating: false,
+        isHydrated: false,
+        syncError: error instanceof Error ? error.message : 'Failed to load data from backend',
+      });
+      throw error;
+    }
+  },
   setActiveList: (listId) =>
     set({
       activeListId: listId,
       activeView: 'list',
     }),
-  addList: (input) =>
-    set((state) => {
-      const nextList: List = {
-        id: `list_${globalThis.crypto?.randomUUID?.() ?? Date.now().toString()}`,
-        ...input,
-      };
-
-      return {
-        lists: [...state.lists, nextList],
-        activeListId: nextList.id,
-        activeView: 'list',
-      };
-    }),
+  addList: async (input) => {
+    const created = await createListInDb(input);
+    set((state) => ({
+      lists: [...state.lists, created],
+      activeListId: created.id,
+      activeView: 'list',
+    }));
+  },
   setActiveView: (view) => set({ activeView: view }),
-  toggleTaskCompleted: (taskId) =>
+  toggleTaskCompleted: async (taskId) => {
+    const updated = await toggleTaskCompletedInDb(taskId);
     set((state) => ({
-      tasks: state.tasks.map((task) =>
-        task.id === taskId ? { ...task, completed: !task.completed } : task,
-      ),
-    })),
-  updateTask: (taskId, patch) =>
+      tasks: state.tasks.map((task) => (task.id === updated.id ? updated : task)),
+    }));
+  },
+  updateTask: async (taskId, patch) => {
+    const existing = get().tasks.find((task) => task.id === taskId);
+    if (!existing) {
+      return;
+    }
+
+    const merged: Task = {
+      ...existing,
+      ...patch,
+      id: existing.id,
+    };
+
+    const saved = await saveTaskInDb(merged);
     set((state) => ({
-      tasks: state.tasks.map((task) => (task.id === taskId ? { ...task, ...patch } : task)),
-    })),
-  addTaskFromDraft: (defaultListId, useDraftList) =>
-    set((state) => {
-      const title = state.draftTask.title.trim();
+      tasks: state.tasks.map((task) => (task.id === saved.id ? saved : task)),
+    }));
+  },
+  addTaskFromDraft: async (defaultListId, useDraftList) => {
+    const state = get();
+    const title = state.draftTask.title.trim();
+    if (!title) {
+      return;
+    }
 
-      if (!title) {
-        return state;
-      }
-
-      const targetListId = useDraftList ? (state.draftTask.listId ?? undefined) : defaultListId;
-
-      const scheduleDefaults = inferDefaultSchedule(
-        {
-          ...state.draftTask,
-          title,
-        },
-        targetListId,
-        state.tasks,
-      );
-
-      const nextTask: Task = {
-        id: `task_${globalThis.crypto?.randomUUID?.() ?? Date.now().toString()}`,
-        listId: targetListId,
+    const targetListId = useDraftList ? (state.draftTask.listId ?? undefined) : defaultListId;
+    const scheduleDefaults = inferDefaultSchedule(
+      {
+        ...state.draftTask,
         title,
-        detail: state.draftTask.detail.trim() || undefined,
-        completed: false,
-        date: scheduleDefaults.date,
-        time: scheduleDefaults.time,
-        reminder: scheduleDefaults.reminder,
-        reminderOffsetMinutes: scheduleDefaults.reminderOffsetMinutes,
-        repeat: state.draftTask.repeat ?? null,
-        actions: state.draftTask.actions.length > 0 ? state.draftTask.actions : undefined,
-      };
+      },
+      targetListId,
+      state.tasks,
+    );
 
-      return {
-        tasks: [nextTask, ...state.tasks],
-        draftTask: initialDraftTask,
-      };
-    }),
-  addScheme: (input) =>
+    const created = await createTaskInDb({
+      listId: targetListId,
+      title,
+      detail: state.draftTask.detail.trim() || undefined,
+      date: scheduleDefaults.date,
+      time: scheduleDefaults.time,
+      reminder: scheduleDefaults.reminder,
+      reminderOffsetMinutes: scheduleDefaults.reminderOffsetMinutes,
+      repeat: state.draftTask.repeat ?? null,
+      actions: state.draftTask.actions.length > 0 ? state.draftTask.actions : undefined,
+    });
+
+    set((current) => ({
+      tasks: [created, ...current.tasks],
+      draftTask: initialDraftTask,
+    }));
+  },
+  addScheme: async (input) => {
+    const created = await createSchemeInDb(input);
     set((state) => ({
-      schemes: [
-        ...state.schemes,
-        {
-          id: `scheme_${globalThis.crypto?.randomUUID?.() ?? Date.now().toString()}`,
-          ...input,
-        },
-      ],
-    })),
-  updateScheme: (schemeId, patch) =>
+      schemes: [...state.schemes, created],
+    }));
+  },
+  updateScheme: async (schemeId, patch) => {
+    const updated = await updateSchemeInDb(schemeId, patch);
     set((state) => ({
-      schemes: state.schemes.map((scheme) =>
-        scheme.id === schemeId
-          ? {
-              ...scheme,
-              ...patch,
-            }
-          : scheme,
-      ),
-    })),
-  deleteScheme: (schemeId) =>
+      schemes: state.schemes.map((scheme) => (scheme.id === updated.id ? updated : scheme)),
+    }));
+  },
+  deleteScheme: async (schemeId) => {
+    await deleteSchemeInDb(schemeId);
     set((state) => ({
       schemes: state.schemes.filter((scheme) => scheme.id !== schemeId),
+      tasks: state.tasks.map((task) => ({
+        ...task,
+        actions: task.actions?.filter((action) => action.schemeId !== schemeId),
+      })),
       draftTask: {
         ...state.draftTask,
         actions: state.draftTask.actions.filter((action) => action.schemeId !== schemeId),
       },
-    })),
+    }));
+  },
   updateDraftTask: (patch) =>
     set((state) => ({
       draftTask: {

@@ -35,6 +35,7 @@ function App() {
     deleteList,
     setActiveView,
     updateDraftTask,
+    dispatchDraftSchedule,
     addTaskFromDraft,
     toggleTaskCompleted,
     deleteTask,
@@ -110,15 +111,41 @@ function App() {
     }
 
     if (taskFilter === 'today') {
-      return task.date === todayDate;
+      return task.dueDate === todayDate;
     }
     if (taskFilter === 'overdue') {
-      return Boolean(task.date) && (task.date ?? '') < todayDate;
+      return Boolean(task.dueDate) && (task.dueDate ?? '') < todayDate;
     }
     if (taskFilter === 'upcoming') {
-      return Boolean(task.date) && (task.date ?? '') > todayDate;
+      return Boolean(task.dueDate) && (task.dueDate ?? '') > todayDate;
     }
     return true;
+  });
+  visibleTasks.sort((a, b) => {
+    const aDate = a.dueDate ?? null;
+    const bDate = b.dueDate ?? null;
+    if (aDate === null && bDate !== null) {
+      return 1;
+    }
+    if (aDate !== null && bDate === null) {
+      return -1;
+    }
+    if (aDate !== bDate) {
+      return (aDate ?? '').localeCompare(bDate ?? '');
+    }
+
+    const aTime = a.time ?? null;
+    const bTime = b.time ?? null;
+    if (aTime === null && bTime !== null) {
+      return 1;
+    }
+    if (aTime !== null && bTime === null) {
+      return -1;
+    }
+    if (aTime !== bTime) {
+      return (aTime ?? '').localeCompare(bTime ?? '');
+    }
+    return 0;
   });
 
   const title = activeView === 'completed' ? '✅ 已完成' : activeList?.name ?? '列表';
@@ -272,25 +299,25 @@ function App() {
     const runDueTasks = async () => {
       const now = Date.now();
       for (const task of tasks) {
-        if (task.completed || !task.date || !task.time) {
+        if (task.completed || !task.dueDate || !task.time) {
           continue;
         }
 
-        const dueAt = new Date(`${task.date}T${task.time}:00`).getTime();
+        const dueAt = new Date(`${task.dueDate}T${task.time}:00`).getTime();
         if (!Number.isFinite(dueAt) || dueAt > now) {
           continue;
         }
 
-        if (task.reminder) {
-          const reminderOffsetMinutes = Math.max(0, task.reminderOffsetMinutes ?? 10);
+        if (task.reminder?.type === 'relative') {
+          const reminderOffsetMinutes = Math.max(0, task.reminder.offsetMinutes);
           const remindAt = dueAt - reminderOffsetMinutes * 60_000;
-          const reminderKey = `${task.id}|${task.date}|${task.time}|${reminderOffsetMinutes}`;
+          const reminderKey = `${task.id}|${task.dueDate}|${task.time}|${reminderOffsetMinutes}`;
           if (remindAt <= now && !notifiedReminderKeysRef.current.has(reminderKey)) {
             try {
               if (await ensureNotificationPermission()) {
                 sendNotification({
                   title: `任务提醒：${task.title}`,
-                  body: task.detail?.trim() || `计划时间 ${task.date} ${task.time}`,
+                  body: task.detail?.trim() || `计划时间 ${task.dueDate} ${task.time}`,
                 });
                 notifiedReminderKeysRef.current.add(reminderKey);
               }
@@ -307,7 +334,7 @@ function App() {
             continue;
           }
 
-          const runKey = `${task.id}|${task.date}|${task.time}|${scheme.id}`;
+          const runKey = `${task.id}|${task.dueDate}|${task.time}|${scheme.id}`;
           if (executedScriptTaskKeysRef.current.has(runKey)) {
             continue;
           }
@@ -401,10 +428,9 @@ function App() {
             draftTitle={draftTask.title}
             draftDetail={draftTask.detail}
             draftListId={draftTask.listId}
-            draftDate={draftTask.date}
+            draftDueDate={draftTask.dueDate}
             draftTime={draftTask.time}
             draftReminder={draftTask.reminder}
-            draftReminderOffsetMinutes={draftTask.reminderOffsetMinutes}
             draftRepeatType={draftTask.repeat?.type ?? 'none'}
             draftRepeatDaysOfWeek={draftTask.repeat?.dayOfWeek ?? []}
             draftRepeatDaysOfMonth={draftTask.repeat?.dayOfMonth ?? []}
@@ -413,11 +439,14 @@ function App() {
             taskFilter={taskFilter}
             onDraftTitleChange={(value) => updateDraftTask({ title: value })}
             onDraftDetailChange={(value) => updateDraftTask({ detail: value })}
-            onDraftDateChange={(value) => updateDraftTask({ date: value })}
-            onDraftTimeChange={(value) => updateDraftTask({ time: value })}
-            onDraftReminderChange={(value) => updateDraftTask({ reminder: value })}
-            onDraftReminderOffsetChange={(value) =>
-              updateDraftTask({ reminderOffsetMinutes: Math.max(0, value) })
+            onDraftDueDateChange={(value) =>
+              dispatchDraftSchedule({ type: 'DRAFT_SET_DUE_DATE', dueDate: value })
+            }
+            onDraftTimeChange={(value) =>
+              dispatchDraftSchedule({ type: 'DRAFT_SET_TIME', time: value })
+            }
+            onDraftReminderChange={(value) =>
+              dispatchDraftSchedule({ type: 'DRAFT_SET_REMINDER', reminder: value })
             }
             onDraftRepeatTypeChange={(value) => {
               if (value === 'none') {
@@ -427,7 +456,7 @@ function App() {
 
               if (value === 'daily') {
                 updateDraftTask({
-                  date: undefined,
+                  dueDate: null,
                   repeat: { type: 'daily' },
                 });
                 return;
@@ -435,7 +464,7 @@ function App() {
 
               if (value === 'weekly') {
                 updateDraftTask({
-                  date: undefined,
+                  dueDate: null,
                   repeat: {
                     type: 'weekly',
                     dayOfWeek: draftTask.repeat?.dayOfWeek?.length
@@ -447,7 +476,7 @@ function App() {
               }
 
               updateDraftTask({
-                date: undefined,
+                dueDate: null,
                 repeat: {
                   type: 'monthly',
                   dayOfMonth: draftTask.repeat?.dayOfMonth?.length

@@ -15,16 +15,22 @@ export interface RepeatRule {
   dayOfMonth?: number[];
 }
 
+export interface RelativeReminder {
+  type: 'relative';
+  offsetMinutes: number;
+}
+
+export type TaskReminder = RelativeReminder | null;
+
 export interface Task {
   id: string;
   listId?: string;
   title: string;
   detail?: string;
   completed: boolean;
-  date?: string;
-  time?: string;
-  reminder?: boolean;
-  reminderOffsetMinutes?: number;
+  dueDate?: string | null;
+  time?: string | null;
+  reminder?: TaskReminder;
   repeat?: RepeatRule | null;
   actions?: TaskActionBinding[];
 }

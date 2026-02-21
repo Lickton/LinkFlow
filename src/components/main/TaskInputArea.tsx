@@ -1,8 +1,9 @@
 import { Bell, Calendar, ChevronDown, Clock3, Link2, Repeat2 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useReducer, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { AppSelect } from '../common/AppSelect';
-import type { List, RepeatType } from '../../types/models';
+import type { List, RepeatType, TaskReminder } from '../../types/models';
+import { toRelativeReminder } from '../../utils/schedule';
 
 interface ActionPreview {
   key: string;
@@ -13,10 +14,9 @@ interface ActionPreview {
 interface TaskInputAreaProps {
   value: string;
   detail?: string;
-  date?: string;
-  time?: string;
-  reminder?: boolean;
-  reminderOffsetMinutes?: number;
+  dueDate: string | null;
+  time: string | null;
+  reminder: TaskReminder;
   repeatType: RepeatType | 'none';
   repeatDaysOfWeek: number[];
   repeatDaysOfMonth: number[];
@@ -26,10 +26,9 @@ interface TaskInputAreaProps {
   selectedListId?: string | null;
   onChange: (value: string) => void;
   onDetailChange: (value: string) => void;
-  onDateChange: (value?: string) => void;
-  onTimeChange: (value?: string) => void;
-  onReminderChange: (value: boolean) => void;
-  onReminderOffsetChange: (value: number) => void;
+  onDueDateChange: (value: string | null) => void;
+  onTimeChange: (value: string | null) => void;
+  onReminderChange: (value: TaskReminder) => void;
   onRepeatTypeChange: (value: RepeatType | 'none') => void;
   onToggleRepeatWeekDay: (value: number) => void;
   onSetRepeatMonthDays: (value: number[]) => void;
@@ -41,14 +40,87 @@ interface TaskInputAreaProps {
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 const QUICK_MONTH_DAYS = [1, 5, 10, 15, 20, 25, 31];
 const REMINDER_PRESETS = [0, 1, 2, 5, 10];
+const TIME_PRESETS = ['09:00', '12:00', '18:00', '21:00'];
+
+type ActivePanel = 'detail' | 'time' | 'reminder' | 'repeat' | null;
+
+type UiAction =
+  | { type: 'UI_OPEN_PANEL'; panel: ActivePanel; currentTime: string | null }
+  | { type: 'UI_CLOSE_PANEL' }
+  | { type: 'UI_SET_TIME_INPUT'; value: string }
+  | { type: 'UI_SET_TIME_ERROR'; message: string | null };
+
+interface UiState {
+  activePanel: ActivePanel;
+  openedTimeValue: string | null;
+  timeInput: string;
+  timeError: string | null;
+}
+
+const initialUiState: UiState = {
+  activePanel: null,
+  openedTimeValue: null,
+  timeInput: '00:00',
+  timeError: null,
+};
+
+function uiReducer(state: UiState, action: UiAction): UiState {
+  switch (action.type) {
+    case 'UI_OPEN_PANEL': {
+      if (action.panel === 'time') {
+        const snapshot = action.currentTime ?? null;
+        return {
+          activePanel: 'time',
+          openedTimeValue: snapshot,
+          timeInput: snapshot ?? '00:00',
+          timeError: null,
+        };
+      }
+      return {
+        ...state,
+        activePanel: action.panel,
+        timeError: null,
+      };
+    }
+    case 'UI_CLOSE_PANEL': {
+      return {
+        ...state,
+        activePanel: null,
+        timeError: null,
+      };
+    }
+    case 'UI_SET_TIME_INPUT': {
+      return {
+        ...state,
+        timeInput: action.value,
+        timeError: null,
+      };
+    }
+    case 'UI_SET_TIME_ERROR': {
+      return {
+        ...state,
+        timeError: action.message,
+      };
+    }
+    default:
+      return state;
+  }
+}
+
+function isValidTime(value: string): boolean {
+  if (!/^\d{2}:\d{2}$/.test(value)) {
+    return false;
+  }
+  const [hours, minutes] = value.split(':').map(Number);
+  return Number.isInteger(hours) && Number.isInteger(minutes) && hours >= 0 && hours <= 23 && minutes >= 0 && minutes <= 59;
+}
 
 export function TaskInputArea({
   value,
   detail,
-  date,
+  dueDate,
   time,
   reminder,
-  reminderOffsetMinutes,
   repeatType,
   repeatDaysOfWeek,
   repeatDaysOfMonth,
@@ -58,10 +130,9 @@ export function TaskInputArea({
   selectedListId,
   onChange,
   onDetailChange,
-  onDateChange,
+  onDueDateChange,
   onTimeChange,
   onReminderChange,
-  onReminderOffsetChange,
   onRepeatTypeChange,
   onToggleRepeatWeekDay,
   onSetRepeatMonthDays,
@@ -70,27 +141,26 @@ export function TaskInputArea({
   onOpenActionPicker,
 }: TaskInputAreaProps) {
   const dateInputRef = useRef<HTMLInputElement>(null);
-  const timeInputRef = useRef<HTMLInputElement>(null);
-  const [activePanel, setActivePanel] = useState<'detail' | 'time' | 'reminder' | 'repeat' | null>(
-    null,
-  );
-  const [timeDraft, setTimeDraft] = useState(time ?? '');
+  const [ui, dispatchUi] = useReducer(uiReducer, {
+    ...initialUiState,
+    timeInput: time ?? '00:00',
+  });
 
   const monthDaysText = useMemo(() => repeatDaysOfMonth.join(','), [repeatDaysOfMonth]);
   const canSubmit = value.trim().length > 0;
+  const reminderOffsetMinutes = reminder?.type === 'relative' ? reminder.offsetMinutes : 10;
+  const canUseRelativeReminder = Boolean(dueDate && time);
 
-  useEffect(() => {
-    setTimeDraft(time ?? '');
-  }, [time]);
+  const commitTimeInput = () => {
+    const normalized = ui.timeInput.trim() || '00:00';
 
-  const commitTimeDraft = () => {
-    const normalized = timeDraft.trim();
-    onTimeChange(normalized ? normalized : undefined);
-  };
+    if (!isValidTime(normalized)) {
+      dispatchUi({ type: 'UI_SET_TIME_ERROR', message: '时间格式不合法，请使用 HH:mm。' });
+      return;
+    }
 
-  const applyTimeDraft = (nextValue: string) => {
-    setTimeDraft(nextValue);
-    onTimeChange(nextValue || undefined);
+    onTimeChange(normalized);
+    dispatchUi({ type: 'UI_CLOSE_PANEL' });
   };
 
   const repeatLabel =
@@ -102,9 +172,7 @@ export function TaskInputArea({
           ? `每周(${repeatDaysOfWeek.length})`
           : `每月(${repeatDaysOfMonth.length})`;
 
-  const reminderLabel = reminder
-    ? `提醒(${reminderOffsetMinutes ?? 10}分钟前)`
-    : '提醒';
+  const reminderLabel = reminder?.type === 'relative' ? `提醒(${reminder.offsetMinutes}分钟前)` : '提醒';
 
   return (
     <section className="mb-6 rounded-xl border border-gray-200 bg-white p-4">
@@ -117,10 +185,7 @@ export function TaskInputArea({
         />
         <button
           type="button"
-          onClick={() => {
-            commitTimeDraft();
-            onSubmit();
-          }}
+          onClick={onSubmit}
           disabled={!canSubmit}
           className={`rounded-xl px-3 py-2 text-xs font-medium transition ${
             canSubmit
@@ -136,15 +201,21 @@ export function TaskInputArea({
         <ToolbarButton
           icon={<ChevronDown size={14} />}
           label="详情"
-          active={activePanel === 'detail' || Boolean(detail?.trim())}
-          onClick={() => setActivePanel((prev) => (prev === 'detail' ? null : 'detail'))}
+          active={ui.activePanel === 'detail' || Boolean(detail?.trim())}
+          onClick={() =>
+            dispatchUi({
+              type: ui.activePanel === 'detail' ? 'UI_CLOSE_PANEL' : 'UI_OPEN_PANEL',
+              panel: 'detail',
+              currentTime: time,
+            })
+          }
         />
 
         {repeatType === 'none' ? (
           <ToolbarButton
             icon={<Calendar size={14} />}
-            label={date ? `日期 ${date}` : '日期'}
-            active={Boolean(date)}
+            label={dueDate ? `日期 ${dueDate}` : '日期'}
+            active={Boolean(dueDate)}
             onClick={() => {
               const input = dateInputRef.current;
               if (!input) {
@@ -159,22 +230,40 @@ export function TaskInputArea({
         <ToolbarButton
           icon={<Clock3 size={14} />}
           label={time ? `时间 ${time}` : '时间'}
-          active={activePanel === 'time' || Boolean(time)}
-          onClick={() => setActivePanel((prev) => (prev === 'time' ? null : 'time'))}
+          active={ui.activePanel === 'time' || Boolean(time)}
+          onClick={() => {
+            if (ui.activePanel === 'time') {
+              dispatchUi({ type: 'UI_CLOSE_PANEL' });
+              return;
+            }
+            dispatchUi({ type: 'UI_OPEN_PANEL', panel: 'time', currentTime: time });
+          }}
         />
 
         <ToolbarButton
           icon={<Bell size={14} />}
           label={reminderLabel}
-          active={activePanel === 'reminder' || Boolean(reminder)}
-          onClick={() => setActivePanel((prev) => (prev === 'reminder' ? null : 'reminder'))}
+          active={ui.activePanel === 'reminder' || Boolean(reminder)}
+          onClick={() =>
+            dispatchUi({
+              type: ui.activePanel === 'reminder' ? 'UI_CLOSE_PANEL' : 'UI_OPEN_PANEL',
+              panel: 'reminder',
+              currentTime: time,
+            })
+          }
         />
 
         <ToolbarButton
           icon={<Repeat2 size={14} />}
           label={repeatLabel}
-          active={activePanel === 'repeat' || repeatType !== 'none'}
-          onClick={() => setActivePanel((prev) => (prev === 'repeat' ? null : 'repeat'))}
+          active={ui.activePanel === 'repeat' || repeatType !== 'none'}
+          onClick={() =>
+            dispatchUi({
+              type: ui.activePanel === 'repeat' ? 'UI_CLOSE_PANEL' : 'UI_OPEN_PANEL',
+              panel: 'repeat',
+              currentTime: time,
+            })
+          }
         />
 
         <ToolbarButton icon={<Link2 size={14} />} label="动作" highlight onClick={onOpenActionPicker} />
@@ -182,7 +271,7 @@ export function TaskInputArea({
         {showListPicker ? (
           <AppSelect
             value={selectedListId ?? '__none__'}
-            onChange={(value) => onSelectedListChange?.(value === '__none__' ? null : value)}
+            onChange={(selected) => onSelectedListChange?.(selected === '__none__' ? null : selected)}
             options={[
               { value: '__none__', label: '无', icon: '∅' },
               ...((lists ?? []).map((list) => ({
@@ -196,9 +285,9 @@ export function TaskInputArea({
         ) : null}
       </div>
 
-      {activePanel ? (
+      {ui.activePanel ? (
         <div className="mt-3 rounded-2xl border border-gray-200/70 bg-gray-50 p-3">
-          {activePanel === 'detail' ? (
+          {ui.activePanel === 'detail' ? (
             <label className="flex flex-col">
               <textarea
                 value={detail ?? ''}
@@ -210,74 +299,102 @@ export function TaskInputArea({
             </label>
           ) : null}
 
-          {activePanel === 'time' ? (
-            <div className="flex items-center gap-2 transition-all duration-150">
-              <span className="text-xs text-gray-400">时间</span>
-              <input
-                ref={timeInputRef}
-                type="time"
-                value={timeDraft}
-                onInput={(event) => applyTimeDraft((event.target as HTMLInputElement).value)}
-                onChange={(event) => applyTimeDraft(event.target.value)}
-                className="h-8 w-[118px] rounded-2xl border border-gray-200/60 bg-white px-3 py-2 text-[14px] font-light tracking-[0.01em] text-gray-600 outline-none transition-all duration-150 hover:border-gray-300/70 hover:bg-gray-50 focus:border-gray-300 focus:ring-2 focus:ring-linkflow-accent/15"
-              />
-              {timeDraft ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setTimeDraft('');
-                    onTimeChange(undefined);
+          {ui.activePanel === 'time' ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs text-gray-400">快捷</span>
+                {TIME_PRESETS.map((preset) => (
+                  <button
+                    key={preset}
+                    type="button"
+                    onClick={() => {
+                      onTimeChange(preset);
+                      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                    }}
+                    className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
+                  >
+                    {preset}
+                  </button>
+                ))}
+
+                {time ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onTimeChange(null);
+                      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                    }}
+                    className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-500 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
+                  >
+                    移除时间
+                  </button>
+                ) : null}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-gray-400">输入</span>
+                <input
+                  type="time"
+                  value={ui.timeInput}
+                  onChange={(event) => dispatchUi({ type: 'UI_SET_TIME_INPUT', value: event.target.value })}
+                  onBlur={commitTimeInput}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape') {
+                      event.preventDefault();
+                      dispatchUi({
+                        type: 'UI_SET_TIME_INPUT',
+                        value: ui.openedTimeValue ?? '',
+                      });
+                      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                      return;
+                    }
+                    if (event.key === 'Enter') {
+                      event.preventDefault();
+                      commitTimeInput();
+                    }
                   }}
-                  className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-500 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
-                >
-                  清除
-                </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => {
-                  const committed = timeInputRef.current?.value ?? timeDraft;
-                  setTimeDraft(committed);
-                  onTimeChange(committed || undefined);
-                  setActivePanel(null);
-                }}
-                className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
-              >
-                确认
-              </button>
+                  className="h-8 w-[118px] rounded-2xl border border-gray-200/60 bg-white px-3 py-2 text-[14px] font-light tracking-[0.01em] text-gray-600 outline-none transition-all duration-150 hover:border-gray-300/70 hover:bg-gray-50 focus:border-gray-300 focus:ring-2 focus:ring-linkflow-accent/15"
+                  autoFocus
+                />
+              </div>
+
+              {ui.timeError ? <p className="text-xs text-red-500">{ui.timeError}</p> : null}
             </div>
           ) : null}
 
-          {activePanel === 'reminder' ? (
+          {ui.activePanel === 'reminder' ? (
             <div className="flex flex-wrap items-center gap-2 transition-all duration-150">
               <button
                 type="button"
-                onClick={() => onReminderChange(!reminder)}
+                disabled={!canUseRelativeReminder}
+                onClick={() =>
+                  onReminderChange(reminder ? null : toRelativeReminder(reminderOffsetMinutes || 10))
+                }
                 className={`rounded-2xl border border-transparent px-3 py-2 text-xs font-medium transition-all duration-150 ${
                   reminder
                     ? 'bg-white text-gray-600 hover:border-gray-200/70'
                     : 'bg-white text-gray-500 hover:border-gray-200/70 hover:bg-gray-100'
-                }`}
+                } ${!canUseRelativeReminder ? 'cursor-not-allowed opacity-40' : ''}`}
               >
                 {reminder ? '已开启提醒' : '提醒已关闭'}
               </button>
 
-              {!reminder ? <span className="text-xs text-gray-400">开启后可设置提前时间</span> : null}
+              {!canUseRelativeReminder ? (
+                <span className="text-xs text-gray-400">先设置日期和时间，才能使用提前提醒</span>
+              ) : null}
 
               <span className="text-xs text-gray-400">提前</span>
               {REMINDER_PRESETS.map((preset) => (
                 <button
                   key={preset}
                   type="button"
-                  onClick={() => {
-                    onReminderOffsetChange(preset);
-                  }}
-                  disabled={!reminder}
+                  onClick={() => onReminderChange(toRelativeReminder(preset))}
+                  disabled={!reminder || !canUseRelativeReminder}
                   className={`rounded-2xl border border-transparent px-3 py-2 text-xs font-medium transition-all duration-150 ${
                     reminderOffsetMinutes === preset
                       ? 'bg-white text-gray-700'
                       : 'bg-white text-gray-500 hover:border-gray-200/70 hover:bg-gray-100'
-                  } ${!reminder ? 'cursor-not-allowed opacity-40' : ''}`}
+                  } ${!reminder || !canUseRelativeReminder ? 'cursor-not-allowed opacity-40' : ''}`}
                 >
                   {preset}m
                 </button>
@@ -286,34 +403,34 @@ export function TaskInputArea({
               <input
                 type="number"
                 min={0}
-                value={reminderOffsetMinutes ?? 10}
+                value={reminderOffsetMinutes}
                 onChange={(event) => {
                   const next = Math.max(0, Number(event.target.value) || 0);
-                  onReminderOffsetChange(next);
+                  onReminderChange(toRelativeReminder(next));
                 }}
-                disabled={!reminder}
+                disabled={!reminder || !canUseRelativeReminder}
                 className="h-8 w-20 rounded-2xl border border-gray-200/60 bg-white px-3 py-2 text-xs font-light text-gray-600 outline-none transition-all duration-150 hover:border-gray-300/70 focus:border-gray-300 focus:ring-2 focus:ring-linkflow-accent/15"
               />
               <span className="text-xs text-gray-400">分钟</span>
             </div>
           ) : null}
 
-          {activePanel === 'repeat' ? (
+          {ui.activePanel === 'repeat' ? (
             <div className="flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <label className="text-xs text-gray-400">重复</label>
-            <AppSelect
-              value={repeatType}
-              onChange={(value) => onRepeatTypeChange(value as RepeatType | 'none')}
-              options={[
-                { value: 'none', label: '不重复' },
-                { value: 'daily', label: '每天' },
-                { value: 'weekly', label: '每周' },
-                { value: 'monthly', label: '每月' },
-              ]}
-              className="w-28"
-            />
-          </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="text-xs text-gray-400">重复</label>
+                <AppSelect
+                  value={repeatType}
+                  onChange={(selected) => onRepeatTypeChange(selected as RepeatType | 'none')}
+                  options={[
+                    { value: 'none', label: '不重复' },
+                    { value: 'daily', label: '每天' },
+                    { value: 'weekly', label: '每周' },
+                    { value: 'monthly', label: '每月' },
+                  ]}
+                  className="w-28"
+                />
+              </div>
 
               {repeatType === 'weekly' ? (
                 <div className="flex flex-wrap items-center gap-1">
@@ -391,40 +508,40 @@ export function TaskInputArea({
       <input
         ref={dateInputRef}
         type="date"
-        value={date ?? ''}
-        onChange={(event) => onDateChange(event.target.value || undefined)}
+        value={dueDate ?? ''}
+        onChange={(event) => onDueDateChange(event.target.value || null)}
         className="sr-only"
       />
 
-      {date || time || reminder || repeatType !== 'none' ? (
+      {dueDate || time || reminder || repeatType !== 'none' ? (
         <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
-          {date && repeatType === 'none' ? (
+          {dueDate && repeatType === 'none' ? (
             <button
               type="button"
-              onClick={() => onDateChange(undefined)}
+              onClick={() => onDueDateChange(null)}
               className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-200"
             >
-              日期: {date} ×
+              {time ? `日期: ${dueDate}` : `${dueDate} · 全天`} ×
             </button>
           ) : null}
 
           {time ? (
             <button
               type="button"
-              onClick={() => onTimeChange(undefined)}
+              onClick={() => onTimeChange(null)}
               className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-200"
             >
               时间: {time} ×
             </button>
           ) : null}
 
-          {reminder ? (
+          {reminder?.type === 'relative' ? (
             <button
               type="button"
-              onClick={() => onReminderChange(false)}
+              onClick={() => onReminderChange(null)}
               className="rounded-full bg-yellow-100 px-2 py-1 text-xs text-yellow-700 transition hover:bg-yellow-200"
             >
-              提醒: 提前{reminderOffsetMinutes ?? 10}m ×
+              提醒: 提前{reminder.offsetMinutes}m ×
             </button>
           ) : null}
 

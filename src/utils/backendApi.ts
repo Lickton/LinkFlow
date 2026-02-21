@@ -13,10 +13,9 @@ export interface NewTaskInput {
   listId?: string;
   title: string;
   detail?: string;
-  date?: string;
-  time?: string;
-  reminder?: boolean;
-  reminderOffsetMinutes?: number;
+  dueDate?: string | null;
+  time?: string | null;
+  reminder?: Task['reminder'];
   repeat?: Task['repeat'];
   actions?: Task['actions'];
 }

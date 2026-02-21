@@ -1,20 +1,21 @@
 import { create } from 'zustand';
-import type { List, RepeatRule, Task, TaskActionBinding, UrlScheme } from '../types/models';
+import type { List, Task, TaskActionBinding, UrlScheme, RepeatRule, TaskReminder } from '../types/models';
 import {
   createList as createListInDb,
   createScheme as createSchemeInDb,
   createTask as createTaskInDb,
   deleteList as deleteListInDb,
-  deleteTask as deleteTaskInDb,
   deleteScheme as deleteSchemeInDb,
+  deleteTask as deleteTaskInDb,
   exportBackup as exportBackupInDb,
   getAppSnapshot,
   importBackup as importBackupInDb,
   saveTask as saveTaskInDb,
   toggleTaskCompleted as toggleTaskCompletedInDb,
-  updateScheme as updateSchemeInDb,
   updateList as updateListInDb,
+  updateScheme as updateSchemeInDb,
 } from '../utils/backendApi';
+import { applyScheduleInvariants, reduceSchedule, toRelativeReminder, type ScheduleAction } from '../utils/schedule';
 
 type ActiveView = 'list' | 'completed';
 
@@ -22,10 +23,9 @@ interface DraftTask {
   title: string;
   detail: string;
   listId?: string | null;
-  date?: string;
-  time?: string;
-  reminder?: boolean;
-  reminderOffsetMinutes?: number;
+  dueDate: string | null;
+  time: string | null;
+  reminder: TaskReminder;
   repeat?: RepeatRule | null;
   actions: TaskActionBinding[];
 }
@@ -56,6 +56,7 @@ interface AppState {
   exportBackup: (path: string) => Promise<string>;
   importBackup: (path: string) => Promise<void>;
   updateDraftTask: (patch: Partial<DraftTask>) => void;
+  dispatchDraftSchedule: (action: ScheduleAction) => void;
   resetDraftTask: () => void;
 }
 
@@ -63,26 +64,27 @@ const initialDraftTask: DraftTask = {
   title: '',
   detail: '',
   listId: null,
-  reminder: true,
-  reminderOffsetMinutes: 10,
+  dueDate: null,
+  time: null,
+  reminder: null,
   repeat: null,
   actions: [],
 };
 
 const pad = (value: number) => value.toString().padStart(2, '0');
 
-const formatDate = (date: Date): string => {
+export const formatDate = (date: Date): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 };
 
 const formatTime = (date: Date): string => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
 
-const normalizeTime = (value?: string): string | undefined => {
+const normalizeTime = (value?: string | null): string | null => {
   if (!value) {
-    return undefined;
+    return null;
   }
   const trimmed = value.trim();
-  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : undefined;
+  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : null;
 };
 
 const roundToFiveMinutes = (date: Date): Date => {
@@ -117,7 +119,7 @@ const inferDefaultSchedule = (
   draft: DraftTask,
   listId: string | undefined,
   tasks: Task[],
-): Pick<Task, 'date' | 'time' | 'reminder' | 'reminderOffsetMinutes'> => {
+): Pick<Task, 'dueDate' | 'time' | 'reminder'> => {
   if (draft.repeat) {
     const previous = [...tasks]
       .reverse()
@@ -129,29 +131,34 @@ const inferDefaultSchedule = (
       );
 
     if (previous) {
-      return {
-        date: draft.date ?? previous.date,
-        time: draft.time ?? previous.time,
-        reminder: draft.reminder ?? previous.reminder,
-        reminderOffsetMinutes: draft.reminderOffsetMinutes ?? previous.reminderOffsetMinutes,
-      };
+      return applyScheduleInvariants({
+        dueDate: draft.dueDate ?? previous.dueDate ?? null,
+        time: draft.time ?? previous.time ?? null,
+        reminder: draft.reminder ?? previous.reminder ?? null,
+      });
     }
+  }
+
+  const normalizedDraftTime = normalizeTime(draft.time);
+
+  if (draft.dueDate && normalizedDraftTime) {
+    return applyScheduleInvariants({
+      dueDate: draft.dueDate,
+      time: normalizedDraftTime,
+      reminder: draft.reminder ?? toRelativeReminder(10),
+    });
+  }
+
+  if (draft.dueDate && !normalizedDraftTime) {
+    return {
+      dueDate: draft.dueDate,
+      time: null,
+      reminder: null,
+    };
   }
 
   const now = new Date();
   const hour = now.getHours();
-  const hasDate = Boolean(draft.date);
-  const normalizedDraftTime = normalizeTime(draft.time);
-  const hasTime = Boolean(normalizedDraftTime);
-
-  if (hasDate && hasTime) {
-    return {
-      date: draft.date,
-      time: normalizedDraftTime,
-      reminder: draft.reminder ?? true,
-      reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
-    };
-  }
 
   if (hour >= 20 || hour < 6) {
     const tomorrowMorning = new Date(now);
@@ -159,19 +166,17 @@ const inferDefaultSchedule = (
     tomorrowMorning.setHours(9, 0, 0, 0);
 
     return {
-      date: draft.date ?? formatDate(tomorrowMorning),
+      dueDate: formatDate(tomorrowMorning),
       time: normalizedDraftTime ?? formatTime(tomorrowMorning),
-      reminder: draft.reminder ?? true,
-      reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
+      reminder: draft.reminder ?? toRelativeReminder(10),
     };
   }
 
   const roundedNow = roundToFiveMinutes(now);
   return {
-    date: draft.date ?? formatDate(roundedNow),
+    dueDate: formatDate(roundedNow),
     time: normalizedDraftTime ?? formatTime(roundedNow),
-    reminder: draft.reminder ?? true,
-    reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
+    reminder: draft.reminder ?? toRelativeReminder(10),
   };
 };
 
@@ -191,7 +196,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       const snapshot = await getAppSnapshot();
       set((state) => ({
         lists: snapshot.lists,
-        tasks: snapshot.tasks,
+        tasks: snapshot.tasks.map((task) => ({
+          ...task,
+          ...applyScheduleInvariants({
+            dueDate: task.dueDate,
+            time: task.time,
+            reminder: task.reminder,
+          }),
+        })),
         schemes: snapshot.schemes,
         activeListId:
           state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
@@ -276,7 +288,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: existing.id,
     };
 
-    const saved = await saveTaskInDb(merged);
+    const normalizedSchedule = applyScheduleInvariants({
+      dueDate: merged.dueDate,
+      time: merged.time,
+      reminder: merged.reminder,
+    });
+
+    const saved = await saveTaskInDb({
+      ...merged,
+      ...normalizedSchedule,
+    });
     set((state) => ({
       tasks: state.tasks.map((task) => (task.id === saved.id ? saved : task)),
     }));
@@ -302,10 +323,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       listId: targetListId,
       title,
       detail: state.draftTask.detail.trim() || undefined,
-      date: scheduleDefaults.date,
+      dueDate: scheduleDefaults.dueDate,
       time: scheduleDefaults.time,
       reminder: scheduleDefaults.reminder,
-      reminderOffsetMinutes: scheduleDefaults.reminderOffsetMinutes,
       repeat: state.draftTask.repeat ?? null,
       actions: state.draftTask.actions.length > 0 ? state.draftTask.actions : undefined,
     });
@@ -346,7 +366,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await importBackupInDb(path);
     set((state) => ({
       lists: snapshot.lists,
-      tasks: snapshot.tasks,
+      tasks: snapshot.tasks.map((task) => ({
+        ...task,
+        ...applyScheduleInvariants({
+          dueDate: task.dueDate,
+          time: task.time,
+          reminder: task.reminder,
+        }),
+      })),
       schemes: snapshot.schemes,
       activeListId:
         state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
@@ -357,10 +384,36 @@ export const useAppStore = create<AppState>((set, get) => ({
     }));
   },
   updateDraftTask: (patch) =>
+    set((state) => {
+      const merged = {
+        ...state.draftTask,
+        ...patch,
+      };
+      const normalizedSchedule = applyScheduleInvariants({
+        dueDate: merged.dueDate,
+        time: merged.time,
+        reminder: merged.reminder,
+      });
+      return {
+        draftTask: {
+          ...merged,
+          ...normalizedSchedule,
+        },
+      };
+    }),
+  dispatchDraftSchedule: (action) =>
     set((state) => ({
       draftTask: {
         ...state.draftTask,
-        ...patch,
+        ...reduceSchedule(
+          {
+            dueDate: state.draftTask.dueDate,
+            time: state.draftTask.time,
+            reminder: state.draftTask.reminder,
+          },
+          action,
+          formatDate(new Date()),
+        ),
       },
     })),
   resetDraftTask: () => set({ draftTask: initialDraftTask }),

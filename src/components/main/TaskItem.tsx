@@ -47,9 +47,9 @@ export function TaskItem({
               {list ? `${list.icon} ${list.name}` : '∅ 无列表'}
             </span>
           ) : null}
-          {task.date ? <span>{task.date}</span> : null}
+          {task.dueDate ? <span>{task.time ? task.dueDate : `${task.dueDate} · 全天`}</span> : null}
           {task.time ? <span>{task.time}</span> : null}
-          {task.reminder ? <span>提醒({task.reminderOffsetMinutes ?? 10}m前)</span> : null}
+          {task.reminder?.type === 'relative' ? <span>提醒({task.reminder.offsetMinutes}m前)</span> : null}
           {task.repeat ? (
             <span>
               {task.repeat.type === 'daily'

@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AppSelect } from '../common/AppSelect';
 import type { RepeatType, Task } from '../../types/models';
+import { applyScheduleInvariants, toRelativeReminder } from '../../utils/schedule';
 
 interface TaskEditModalProps {
   task?: Task;
@@ -17,10 +18,10 @@ const REMINDER_PRESETS = [0, 1, 2, 5, 10];
 
 export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalProps) {
   const [title, setTitle] = useState('');
-  const [date, setDate] = useState<string | undefined>(undefined);
-  const [time, setTime] = useState<string | undefined>(undefined);
-  const [reminder, setReminder] = useState(false);
+  const [dueDate, setDueDate] = useState<string | null>(null);
+  const [time, setTime] = useState<string | null>(null);
   const [reminderOffsetMinutes, setReminderOffsetMinutes] = useState(10);
+  const [reminderEnabled, setReminderEnabled] = useState(false);
   const [repeatType, setRepeatType] = useState<RepeatType | 'none'>('none');
   const [repeatDaysOfWeek, setRepeatDaysOfWeek] = useState<number[]>([]);
   const [repeatDaysOfMonth, setRepeatDaysOfMonth] = useState<number[]>([]);
@@ -31,10 +32,10 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
     }
 
     setTitle(task.title);
-    setDate(task.date);
-    setTime(task.time);
-    setReminder(Boolean(task.reminder));
-    setReminderOffsetMinutes(task.reminderOffsetMinutes ?? 10);
+    setDueDate(task.dueDate ?? null);
+    setTime(task.time ?? null);
+    setReminderEnabled(task.reminder?.type === 'relative');
+    setReminderOffsetMinutes(task.reminder?.type === 'relative' ? task.reminder.offsetMinutes : 10);
     setRepeatType(task.repeat?.type ?? 'none');
     setRepeatDaysOfWeek(task.repeat?.dayOfWeek ?? []);
     setRepeatDaysOfMonth(task.repeat?.dayOfMonth ?? []);
@@ -75,8 +76,8 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
               <span className="mb-1 block text-xs text-gray-400">日期</span>
               <input
                 type="date"
-                value={date ?? ''}
-                onChange={(event) => setDate(event.target.value || undefined)}
+                value={dueDate ?? ''}
+                onChange={(event) => setDueDate(event.target.value || null)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
               />
             </label>
@@ -85,7 +86,7 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
               <input
                 type="time"
                 value={time ?? ''}
-                onChange={(event) => setTime(event.target.value || undefined)}
+                onChange={(event) => setTime(event.target.value || null)}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
               />
             </label>
@@ -110,8 +111,8 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
               <span className="inline-flex items-center gap-2 rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-600">
                 <input
                   type="checkbox"
-                  checked={reminder}
-                  onChange={(event) => setReminder(event.target.checked)}
+                  checked={reminderEnabled}
+                  onChange={(event) => setReminderEnabled(event.target.checked)}
                   className="h-4 w-4 rounded border-gray-300 text-linkflow-accent"
                 />
                 开启提醒
@@ -119,7 +120,7 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
             </label>
           </div>
 
-          {reminder ? (
+          {reminderEnabled ? (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-xs text-gray-400">提前</span>
               {REMINDER_PRESETS.map((preset) => (
@@ -246,12 +247,17 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
                         : null
                       : { type: repeatType };
 
+              const normalizedSchedule = applyScheduleInvariants({
+                dueDate,
+                time,
+                reminder: reminderEnabled ? toRelativeReminder(reminderOffsetMinutes) : null,
+              });
+
               onSave(task.id, {
                 title: title.trim() || task.title,
-                date,
-                time,
-                reminder,
-                reminderOffsetMinutes,
+                dueDate: normalizedSchedule.dueDate,
+                time: normalizedSchedule.time,
+                reminder: normalizedSchedule.reminder,
                 repeat: nextRepeat,
               });
               onClose();

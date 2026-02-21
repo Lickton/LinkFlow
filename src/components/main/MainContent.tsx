@@ -1,4 +1,4 @@
-import type { List, RepeatType, Task, UrlScheme } from '../../types/models';
+import type { List, RepeatType, Task, TaskReminder, UrlScheme } from '../../types/models';
 import { AppSelect } from '../common/AppSelect';
 import { Header } from './Header';
 import { TaskInputArea } from './TaskInputArea';
@@ -20,10 +20,9 @@ interface MainContentProps {
   schemes: UrlScheme[];
   draftTitle: string;
   draftDetail: string;
-  draftDate?: string;
-  draftTime?: string;
-  draftReminder?: boolean;
-  draftReminderOffsetMinutes?: number;
+  draftDueDate?: string | null;
+  draftTime?: string | null;
+  draftReminder?: TaskReminder;
   draftRepeatType: RepeatType | 'none';
   draftRepeatDaysOfWeek: number[];
   draftRepeatDaysOfMonth: number[];
@@ -33,10 +32,9 @@ interface MainContentProps {
   taskFilter: 'all' | 'today' | 'overdue' | 'upcoming';
   onDraftTitleChange: (value: string) => void;
   onDraftDetailChange: (value: string) => void;
-  onDraftDateChange: (value?: string) => void;
-  onDraftTimeChange: (value?: string) => void;
-  onDraftReminderChange: (value: boolean) => void;
-  onDraftReminderOffsetChange: (value: number) => void;
+  onDraftDueDateChange: (value: string | null) => void;
+  onDraftTimeChange: (value: string | null) => void;
+  onDraftReminderChange: (value: TaskReminder) => void;
   onDraftRepeatTypeChange: (value: RepeatType | 'none') => void;
   onDraftToggleRepeatWeekDay: (value: number) => void;
   onDraftSetRepeatMonthDays: (value: number[]) => void;
@@ -61,10 +59,9 @@ export function MainContent({
   schemes,
   draftTitle,
   draftDetail,
-  draftDate,
+  draftDueDate,
   draftTime,
   draftReminder,
-  draftReminderOffsetMinutes,
   draftRepeatType,
   draftRepeatDaysOfWeek,
   draftRepeatDaysOfMonth,
@@ -74,10 +71,9 @@ export function MainContent({
   taskFilter,
   onDraftTitleChange,
   onDraftDetailChange,
-  onDraftDateChange,
+  onDraftDueDateChange,
   onDraftTimeChange,
   onDraftReminderChange,
-  onDraftReminderOffsetChange,
   onDraftRepeatTypeChange,
   onDraftToggleRepeatWeekDay,
   onDraftSetRepeatMonthDays,
@@ -101,10 +97,9 @@ export function MainContent({
         <TaskInputArea
           value={draftTitle}
           detail={draftDetail}
-          date={draftDate}
-          time={draftTime}
-          reminder={draftReminder}
-          reminderOffsetMinutes={draftReminderOffsetMinutes}
+          dueDate={draftDueDate ?? null}
+          time={draftTime ?? null}
+          reminder={draftReminder ?? null}
           repeatType={draftRepeatType}
           repeatDaysOfWeek={draftRepeatDaysOfWeek}
           repeatDaysOfMonth={draftRepeatDaysOfMonth}
@@ -114,10 +109,9 @@ export function MainContent({
           selectedListId={draftListId}
           onChange={onDraftTitleChange}
           onDetailChange={onDraftDetailChange}
-          onDateChange={onDraftDateChange}
+          onDueDateChange={onDraftDueDateChange}
           onTimeChange={onDraftTimeChange}
           onReminderChange={onDraftReminderChange}
-          onReminderOffsetChange={onDraftReminderOffsetChange}
           onRepeatTypeChange={onDraftRepeatTypeChange}
           onToggleRepeatWeekDay={onDraftToggleRepeatWeekDay}
           onSetRepeatMonthDays={onDraftSetRepeatMonthDays}

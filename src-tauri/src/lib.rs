@@ -1,5 +1,6 @@
 use chrono::{Datelike, Duration, NaiveDate};
 use rusqlite::{params, Connection};
+use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -50,16 +51,47 @@ struct RepeatRule {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct Reminder {
+  #[serde(rename = "type")]
+  reminder_type: String,
+  offset_minutes: i64,
+}
+
+fn deserialize_reminder<'de, D>(deserializer: D) -> Result<Option<Reminder>, D::Error>
+where
+  D: Deserializer<'de>,
+{
+  let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+  match value {
+    None | Some(serde_json::Value::Null) => Ok(None),
+    Some(serde_json::Value::Bool(enabled)) => {
+      if enabled {
+        Ok(Some(Reminder {
+          reminder_type: "relative".to_string(),
+          offset_minutes: 10,
+        }))
+      } else {
+        Ok(None)
+      }
+    }
+    Some(raw) => serde_json::from_value::<Reminder>(raw)
+      .map(Some)
+      .map_err(de::Error::custom),
+  }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct TaskItem {
   id: String,
   list_id: Option<String>,
   title: String,
   detail: Option<String>,
   completed: bool,
-  date: Option<String>,
+  due_date: Option<String>,
   time: Option<String>,
-  reminder: Option<bool>,
-  reminder_offset_minutes: Option<i64>,
+  #[serde(default, deserialize_with = "deserialize_reminder")]
+  reminder: Option<Reminder>,
   #[serde(rename = "repeat")]
   repeat_rule: Option<RepeatRule>,
   actions: Option<Vec<TaskActionBinding>>,
@@ -104,10 +136,10 @@ struct NewTaskInput {
   list_id: Option<String>,
   title: String,
   detail: Option<String>,
-  date: Option<String>,
+  due_date: Option<String>,
   time: Option<String>,
-  reminder: Option<bool>,
-  reminder_offset_minutes: Option<i64>,
+  #[serde(default, deserialize_with = "deserialize_reminder")]
+  reminder: Option<Reminder>,
   #[serde(rename = "repeat")]
   repeat_rule: Option<RepeatRule>,
   actions: Option<Vec<TaskActionBinding>>,
@@ -121,10 +153,10 @@ struct SaveTaskInput {
   title: String,
   detail: Option<String>,
   completed: bool,
-  date: Option<String>,
+  due_date: Option<String>,
   time: Option<String>,
-  reminder: Option<bool>,
-  reminder_offset_minutes: Option<i64>,
+  #[serde(default, deserialize_with = "deserialize_reminder")]
+  reminder: Option<Reminder>,
   #[serde(rename = "repeat")]
   repeat_rule: Option<RepeatRule>,
   actions: Option<Vec<TaskActionBinding>>,
@@ -159,6 +191,37 @@ fn validate_repeat_rule(rule: &Option<RepeatRule>) -> Result<(), String> {
   } else {
     Ok(())
   }
+}
+
+fn normalize_relative_reminder(reminder: &Option<Reminder>) -> Result<Option<Reminder>, String> {
+  if let Some(value) = reminder {
+    if value.reminder_type != "relative" {
+      return Err("Only relative reminders are supported".to_string());
+    }
+    return Ok(Some(Reminder {
+      reminder_type: "relative".to_string(),
+      offset_minutes: value.offset_minutes.max(0),
+    }));
+  }
+  Ok(None)
+}
+
+fn reminder_to_db(reminder: &Option<Reminder>) -> Result<(Option<i64>, Option<i64>), String> {
+  let normalized = normalize_relative_reminder(reminder)?;
+  if let Some(value) = normalized {
+    return Ok((Some(1), Some(value.offset_minutes)));
+  }
+  Ok((None, None))
+}
+
+fn reminder_from_db(enabled: Option<i64>, offset: Option<i64>) -> Option<Reminder> {
+  if enabled.unwrap_or(0) == 0 {
+    return None;
+  }
+  Some(Reminder {
+    reminder_type: "relative".to_string(),
+    offset_minutes: offset.unwrap_or(10).max(0),
+  })
 }
 
 fn normalize_scheme_kind(kind: Option<String>) -> String {
@@ -477,10 +540,9 @@ fn load_tasks(conn: &Connection) -> Result<Vec<TaskItem>, String> {
         title: row.get(2)?,
         detail: row.get(3)?,
         completed: row.get::<_, i64>(4)? != 0,
-        date: row.get(5)?,
+        due_date: row.get(5)?,
         time: row.get(6)?,
-        reminder: row.get::<_, Option<i64>>(7)?.map(|value| value != 0),
-        reminder_offset_minutes: row.get(8)?,
+        reminder: reminder_from_db(row.get(7)?, row.get(8)?),
         repeat_rule,
         actions: action_map.get(&id).cloned(),
       })
@@ -587,6 +649,7 @@ fn persist_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(),
 
     for task in &snapshot.tasks {
       validate_repeat_rule(&task.repeat_rule)?;
+      let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&task.reminder)?;
       let repeat_type = task.repeat_rule.as_ref().map(|rule| rule.rule_type.clone());
       let repeat_day_of_week = task
         .repeat_rule
@@ -610,10 +673,10 @@ fn persist_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(),
           task.title,
           task.detail,
           if task.completed { 1 } else { 0 },
-          task.date,
+          task.due_date,
           task.time,
-          task.reminder.map(|v| if v { 1 } else { 0 }),
-          task.reminder_offset_minutes,
+          reminder_enabled,
+          reminder_offset_minutes,
           repeat_type,
           repeat_day_of_week,
           repeat_day_of_month
@@ -638,7 +701,7 @@ fn parse_date_ymd(value: &str) -> Option<NaiveDate> {
 
 fn compute_next_repeat_date(task: &TaskItem) -> Option<String> {
   let repeat_rule = task.repeat_rule.as_ref()?;
-  let current_date = parse_date_ymd(task.date.as_deref()?)?;
+  let current_date = parse_date_ymd(task.due_date.as_deref()?)?;
 
   let next = match repeat_rule.rule_type.as_str() {
     "daily" => current_date.checked_add_signed(Duration::days(1))?,
@@ -931,6 +994,7 @@ fn delete_scheme(db: State<'_, DbState>, scheme_id: String) -> Result<(), String
 #[tauri::command]
 fn create_task(db: State<'_, DbState>, input: NewTaskInput) -> Result<TaskItem, String> {
   validate_repeat_rule(&input.repeat_rule)?;
+  let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&input.reminder)?;
 
   let title = input.title.trim();
   if title.is_empty() {
@@ -971,10 +1035,10 @@ fn create_task(db: State<'_, DbState>, input: NewTaskInput) -> Result<TaskItem, 
           let trimmed = v.trim().to_string();
           if trimmed.is_empty() { None } else { Some(trimmed) }
         }),
-        input.date,
+        input.due_date,
         input.time,
-        input.reminder.map(|v| if v { 1 } else { 0 }),
-        input.reminder_offset_minutes,
+        reminder_enabled,
+        reminder_offset_minutes,
         repeat_type,
         repeat_day_of_week,
         repeat_day_of_month
@@ -997,6 +1061,7 @@ fn create_task(db: State<'_, DbState>, input: NewTaskInput) -> Result<TaskItem, 
 #[tauri::command]
 fn save_task(db: State<'_, DbState>, task: SaveTaskInput) -> Result<TaskItem, String> {
   validate_repeat_rule(&task.repeat_rule)?;
+  let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&task.reminder)?;
 
   let title = task.title.trim();
   if title.is_empty() {
@@ -1049,10 +1114,10 @@ fn save_task(db: State<'_, DbState>, task: SaveTaskInput) -> Result<TaskItem, St
           if trimmed.is_empty() { None } else { Some(trimmed) }
         }),
         if task.completed { 1 } else { 0 },
-        task.date,
+        task.due_date,
         task.time,
-        task.reminder.map(|v| if v { 1 } else { 0 }),
-        task.reminder_offset_minutes,
+        reminder_enabled,
+        reminder_offset_minutes,
         repeat_type,
         repeat_day_of_week,
         repeat_day_of_month
@@ -1094,6 +1159,7 @@ fn toggle_task_completed(db: State<'_, DbState>, task_id: String) -> Result<Task
   if !task.completed && next == 1 {
     if let Some(next_date) = compute_next_repeat_date(&task) {
       let next_task_id = format!("task_{}", Uuid::new_v4());
+      let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&task.reminder)?;
       let repeat_type = task.repeat_rule.as_ref().map(|rule| rule.rule_type.clone());
       let repeat_day_of_week = task
         .repeat_rule
@@ -1121,8 +1187,8 @@ fn toggle_task_completed(db: State<'_, DbState>, task_id: String) -> Result<Task
             task.detail,
             next_date,
             task.time,
-            task.reminder.map(|v| if v { 1 } else { 0 }),
-            task.reminder_offset_minutes,
+            reminder_enabled,
+            reminder_offset_minutes,
             repeat_type,
             repeat_day_of_week,
             repeat_day_of_month

@@ -163,17 +163,6 @@ export function TaskInputArea({
     dispatchUi({ type: 'UI_CLOSE_PANEL' });
   };
 
-  const repeatLabel =
-    repeatType === 'none'
-      ? '重复'
-      : repeatType === 'daily'
-        ? '每天'
-        : repeatType === 'weekly'
-          ? `每周(${repeatDaysOfWeek.length})`
-          : `每月(${repeatDaysOfMonth.length})`;
-
-  const reminderLabel = reminder?.type === 'relative' ? `提醒(${reminder.offsetMinutes}分钟前)` : '提醒';
-
   return (
     <section className="mb-6 rounded-xl border border-gray-200 bg-white p-4">
       <div className="flex items-center gap-2">
@@ -214,7 +203,7 @@ export function TaskInputArea({
         {repeatType === 'none' ? (
           <ToolbarButton
             icon={<Calendar size={14} />}
-            label={dueDate ? `日期 ${dueDate}` : '日期'}
+            label="日期"
             active={Boolean(dueDate)}
             onClick={() => {
               const input = dateInputRef.current;
@@ -229,7 +218,7 @@ export function TaskInputArea({
 
         <ToolbarButton
           icon={<Clock3 size={14} />}
-          label={time ? `时间 ${time}` : '时间'}
+          label="时间"
           active={ui.activePanel === 'time' || Boolean(time)}
           onClick={() => {
             if (ui.activePanel === 'time') {
@@ -242,7 +231,7 @@ export function TaskInputArea({
 
         <ToolbarButton
           icon={<Bell size={14} />}
-          label={reminderLabel}
+          label="提醒"
           active={ui.activePanel === 'reminder' || Boolean(reminder)}
           onClick={() =>
             dispatchUi({
@@ -255,7 +244,7 @@ export function TaskInputArea({
 
         <ToolbarButton
           icon={<Repeat2 size={14} />}
-          label={repeatLabel}
+          label="重复"
           active={ui.activePanel === 'repeat' || repeatType !== 'none'}
           onClick={() =>
             dispatchUi({

@@ -60,19 +60,19 @@ export function AppLayout({ sidebar, main }: AppLayoutProps) {
   return (
     <div className="flex min-h-screen w-screen bg-linkflow-app">
       <div className="flex h-screen w-full min-w-0 flex-1 overflow-hidden bg-white">
-        <div className="h-full shrink-0 min-w-0" style={{ width: `${sidebarWidth}px` }}>
+        <div className="relative h-full shrink-0 min-w-0" style={{ width: `${sidebarWidth}px` }}>
           {sidebar}
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            aria-label="调整侧边栏宽度"
+            onMouseDown={handleDragStart}
+            className="group absolute inset-y-0 -right-1.5 z-10 w-3 cursor-col-resize"
+          >
+            <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-slate-300 transition-colors group-hover:bg-blue-500" />
+          </div>
         </div>
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          aria-label="调整侧边栏宽度"
-          onMouseDown={handleDragStart}
-          className="group relative h-full w-3 shrink-0 cursor-col-resize bg-transparent"
-        >
-          <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-gray-200 transition-colors group-hover:bg-blue-400" />
-        </div>
-        <div className="min-w-0 flex-1">{main}</div>
+        <div className="min-w-0 flex h-full flex-1">{main}</div>
       </div>
     </div>
   );

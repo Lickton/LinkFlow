@@ -90,7 +90,7 @@ export function MainContent({
   const subtitle = activeView === 'completed' ? '全部已完成任务' : '';
 
   return (
-    <section className="flex min-w-0 flex-1 flex-col bg-white p-6">
+    <section className="flex h-full min-w-0 flex-1 flex-col bg-slate-50 p-6">
       <Header title={title} subtitle={subtitle} />
 
       {activeView === 'completed' ? null : (
@@ -121,14 +121,15 @@ export function MainContent({
         />
       )}
 
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <input
-          value={searchQuery}
-          onChange={(event) => onSearchChange(event.target.value)}
-          placeholder="搜索任务标题或详情"
-          className="h-9 min-w-48 flex-1 rounded-xl border border-gray-200/70 bg-white px-3 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-linkflow-accent/15"
-        />
-        <AppSelect
+      <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_4px_14px_rgba(15,23,42,0.05)]">
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={searchQuery}
+            onChange={(event) => onSearchChange(event.target.value)}
+            placeholder="搜索任务标题或详情"
+            className="h-10 min-w-48 flex-1 rounded-xl border border-slate-300/80 bg-slate-50 px-3 text-sm font-medium text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-linkflow-accent/15"
+          />
+          <AppSelect
           value={taskFilter}
           onChange={(value) => onTaskFilterChange(value as 'all' | 'today' | 'overdue' | 'upcoming')}
           options={[
@@ -137,20 +138,26 @@ export function MainContent({
             { value: 'overdue', label: '逾期' },
             { value: 'upcoming', label: '未来' },
           ]}
-          className="w-32"
-        />
+            className="w-36"
+          />
+        </div>
       </div>
 
-      <TaskList
-        tasks={visibleTasks}
-        lists={lists}
-        schemes={schemes}
-        showListInfo={isAllTasksView}
-        onToggleCompleted={onToggleCompleted}
-        onDeleteTask={onDeleteTask}
-        onExecuteAction={onExecuteAction}
-        onEditTask={onEditTask}
-      />
+      <div className="mb-3 border-t border-slate-200" />
+
+      <div className="min-h-0 flex-1">
+        <TaskList
+          tasks={visibleTasks}
+          lists={lists}
+          schemes={schemes}
+          showListInfo={isAllTasksView}
+          showCreateHint={activeView !== 'completed'}
+          onToggleCompleted={onToggleCompleted}
+          onDeleteTask={onDeleteTask}
+          onExecuteAction={onExecuteAction}
+          onEditTask={onEditTask}
+        />
+      </div>
     </section>
   );
 }

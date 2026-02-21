@@ -4,15 +4,15 @@
 
 :root {
   font-family: 'SF Pro Text', 'PingFang SC', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #1f2937;
-  background-color: #dfdfdf;
+  color: #111827;
+  background-color: #cfd4dc;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  background-color: #dfdfdf;
+  background-color: #cfd4dc;
 }
 
 html,

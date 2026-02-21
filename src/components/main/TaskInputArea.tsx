@@ -164,29 +164,30 @@ export function TaskInputArea({
   };
 
   return (
-    <section className="mb-6 rounded-xl border border-gray-200 bg-white p-4">
+    <section className="mb-6 rounded-xl border border-slate-300/80 bg-white p-4 shadow-[0_8px_22px_rgba(15,23,42,0.08)]">
       <div className="flex items-center gap-2">
         <input
+          id="task-title-input"
           value={value}
           onChange={(event) => onChange(event.target.value)}
           placeholder="添加新任务"
-          className="flex-1 border-none bg-transparent text-sm text-gray-800 outline-none placeholder:text-gray-400"
+          className="flex-1 border-none bg-transparent text-base font-semibold text-slate-900 outline-none placeholder:font-medium placeholder:text-slate-400"
         />
         <button
           type="button"
           onClick={onSubmit}
           disabled={!canSubmit}
-          className={`rounded-xl px-3 py-2 text-xs font-medium transition ${
+          className={`rounded-xl px-4 py-2 text-sm font-semibold transition ${
             canSubmit
-              ? 'bg-linkflow-accent text-white hover:opacity-90'
-              : 'cursor-not-allowed bg-gray-200 text-gray-400'
+              ? 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
+              : 'cursor-not-allowed bg-slate-300 text-slate-500'
           }`}
         >
           创建
         </button>
       </div>
 
-      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+      <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
         <ToolbarButton
           icon={<ChevronDown size={14} />}
           label="详情"
@@ -275,7 +276,7 @@ export function TaskInputArea({
       </div>
 
       {ui.activePanel ? (
-        <div className="mt-3 rounded-2xl border border-gray-200/70 bg-gray-50 p-3">
+        <div className="mt-3 rounded-2xl border border-slate-300/70 bg-slate-100/70 p-3 shadow-inner">
           {ui.activePanel === 'detail' ? (
             <label className="flex flex-col">
               <textarea
@@ -283,7 +284,7 @@ export function TaskInputArea({
                 onChange={(event) => onDetailChange(event.target.value)}
                 rows={3}
                 placeholder="输入任务详情..."
-                className="w-full resize-none rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 outline-none transition focus:ring-2 focus:ring-linkflow-accent/15"
+                className="w-full resize-none rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 outline-none transition focus:ring-2 focus:ring-linkflow-accent/15"
               />
             </label>
           ) : null}
@@ -503,12 +504,12 @@ export function TaskInputArea({
       />
 
       {dueDate || time || reminder || repeatType !== 'none' ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
           {dueDate && repeatType === 'none' ? (
             <button
               type="button"
               onClick={() => onDueDateChange(null)}
-              className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-200"
+              className="rounded-full bg-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-300"
             >
               {time ? `日期: ${dueDate}` : `${dueDate} · 全天`} ×
             </button>
@@ -518,7 +519,7 @@ export function TaskInputArea({
             <button
               type="button"
               onClick={() => onTimeChange(null)}
-              className="rounded-full bg-gray-100 px-2 py-1 text-xs text-gray-500 transition hover:bg-gray-200"
+              className="rounded-full bg-slate-200 px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-300"
             >
               时间: {time} ×
             </button>
@@ -528,7 +529,7 @@ export function TaskInputArea({
             <button
               type="button"
               onClick={() => onReminderChange(null)}
-              className="rounded-full bg-yellow-100 px-2 py-1 text-xs text-yellow-700 transition hover:bg-yellow-200"
+              className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-700 transition hover:bg-amber-200"
             >
               提醒: 提前{reminder.offsetMinutes}m ×
             </button>
@@ -538,7 +539,7 @@ export function TaskInputArea({
             <button
               type="button"
               onClick={() => onRepeatTypeChange('none')}
-              className="rounded-full bg-blue-100 px-2 py-1 text-xs text-linkflow-accent transition hover:bg-blue-200"
+              className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-linkflow-accent transition hover:bg-blue-200"
             >
               {repeatType === 'daily'
                 ? '重复: 每天'
@@ -552,9 +553,9 @@ export function TaskInputArea({
       ) : null}
 
       {(actions?.length ?? 0) > 0 ? (
-        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-gray-100 pt-3">
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-3">
           {actions?.map((action) => (
-            <span key={action.key} className="rounded-full bg-blue-100 px-2 py-1 text-xs text-linkflow-accent">
+            <span key={action.key} className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-linkflow-accent">
               {action.label}
             </span>
           ))}
@@ -577,12 +578,12 @@ function ToolbarButton({ icon, label, highlight = false, active = false, onClick
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex h-9 items-center gap-1 rounded-2xl border border-transparent px-3 py-2 text-xs font-medium transition-all duration-150 ${
+      className={`inline-flex h-9 items-center gap-1 rounded-2xl border px-3 py-2 text-xs font-semibold transition-all duration-150 ${
         highlight
-          ? 'text-gray-600 hover:border-gray-200/70 hover:bg-gray-50'
+          ? 'border-slate-300/80 bg-slate-100 text-slate-700 hover:bg-slate-200'
           : active
-            ? 'bg-gray-100 text-gray-600'
-            : 'text-gray-400 hover:border-gray-200/70 hover:bg-gray-50 hover:text-gray-500'
+            ? 'border-blue-200 bg-blue-50 text-linkflow-accent'
+            : 'border-slate-300/80 bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-700'
       }`}
     >
       {icon}

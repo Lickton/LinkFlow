@@ -1,4 +1,5 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use chrono::{Datelike, Duration, NaiveDate};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -64,12 +65,20 @@ struct TaskItem {
   actions: Option<Vec<TaskActionBinding>>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AppSnapshot {
   lists: Vec<ListItem>,
   tasks: Vec<TaskItem>,
   schemes: Vec<UrlScheme>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BackupPayload {
+  version: u32,
+  exported_at: String,
+  snapshot: AppSnapshot,
 }
 
 #[derive(Debug, Deserialize)]
@@ -519,10 +528,249 @@ fn fetch_task_by_id(conn: &Connection, task_id: &str) -> Result<TaskItem, String
     .ok_or_else(|| "Task not found".to_string())
 }
 
+fn persist_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(), String> {
+  let tx = conn
+    .transaction()
+    .map_err(|err| format!("Failed to start snapshot transaction: {err}"))?;
+
+  tx
+    .execute("DELETE FROM task_actions", [])
+    .map_err(|err| format!("Failed to clear task actions: {err}"))?;
+  tx
+    .execute("DELETE FROM tasks", [])
+    .map_err(|err| format!("Failed to clear tasks: {err}"))?;
+  tx
+    .execute("DELETE FROM schemes", [])
+    .map_err(|err| format!("Failed to clear schemes: {err}"))?;
+  tx
+    .execute("DELETE FROM lists", [])
+    .map_err(|err| format!("Failed to clear lists: {err}"))?;
+
+  {
+    let mut list_stmt = tx
+      .prepare("INSERT INTO lists (id, name, icon) VALUES (?1, ?2, ?3)")
+      .map_err(|err| format!("Failed to prepare list insert statement: {err}"))?;
+    for list in &snapshot.lists {
+      list_stmt
+        .execute(params![list.id, list.name, list.icon])
+        .map_err(|err| format!("Failed to insert list: {err}"))?;
+    }
+  }
+
+  {
+    let mut scheme_stmt = tx
+      .prepare(
+        "INSERT INTO schemes (id, name, icon, template, kind, param_type) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+      )
+      .map_err(|err| format!("Failed to prepare scheme insert statement: {err}"))?;
+    for scheme in &snapshot.schemes {
+      scheme_stmt
+        .execute(params![
+          scheme.id,
+          scheme.name,
+          scheme.icon,
+          scheme.template,
+          scheme.kind,
+          scheme.param_type
+        ])
+        .map_err(|err| format!("Failed to insert scheme: {err}"))?;
+    }
+  }
+
+  {
+    let mut task_stmt = tx
+      .prepare(
+        "INSERT INTO tasks (id, list_id, title, detail, completed, date, time, reminder, reminder_offset_minutes, repeat_type, repeat_day_of_week, repeat_day_of_month)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+      )
+      .map_err(|err| format!("Failed to prepare task insert statement: {err}"))?;
+
+    for task in &snapshot.tasks {
+      validate_repeat_rule(&task.repeat_rule)?;
+      let repeat_type = task.repeat_rule.as_ref().map(|rule| rule.rule_type.clone());
+      let repeat_day_of_week = task
+        .repeat_rule
+        .as_ref()
+        .and_then(|rule| rule.day_of_week.clone())
+        .map(|days| serde_json::to_string(&days))
+        .transpose()
+        .map_err(|err| format!("Failed to encode repeat days of week: {err}"))?;
+      let repeat_day_of_month = task
+        .repeat_rule
+        .as_ref()
+        .and_then(|rule| rule.day_of_month.clone())
+        .map(|days| serde_json::to_string(&days))
+        .transpose()
+        .map_err(|err| format!("Failed to encode repeat days of month: {err}"))?;
+
+      task_stmt
+        .execute(params![
+          task.id,
+          task.list_id,
+          task.title,
+          task.detail,
+          if task.completed { 1 } else { 0 },
+          task.date,
+          task.time,
+          task.reminder.map(|v| if v { 1 } else { 0 }),
+          task.reminder_offset_minutes,
+          repeat_type,
+          repeat_day_of_week,
+          repeat_day_of_month
+        ])
+        .map_err(|err| format!("Failed to insert task: {err}"))?;
+
+      if let Some(actions) = task.actions.as_ref() {
+        persist_task_actions(&tx, &task.id, actions)?;
+      }
+    }
+  }
+
+  tx
+    .commit()
+    .map_err(|err| format!("Failed to commit snapshot transaction: {err}"))?;
+  Ok(())
+}
+
+fn parse_date_ymd(value: &str) -> Option<NaiveDate> {
+  NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+}
+
+fn compute_next_repeat_date(task: &TaskItem) -> Option<String> {
+  let repeat_rule = task.repeat_rule.as_ref()?;
+  let current_date = parse_date_ymd(task.date.as_deref()?)?;
+
+  let next = match repeat_rule.rule_type.as_str() {
+    "daily" => current_date.checked_add_signed(Duration::days(1))?,
+    "weekly" => {
+      let mut days = repeat_rule.day_of_week.clone().unwrap_or_default();
+      if days.is_empty() {
+        return None;
+      }
+      days.sort_unstable();
+      let today_weekday = current_date.weekday().num_days_from_sunday() as u8;
+
+      let mut target_offset: Option<i64> = None;
+      for day in days {
+        if day > today_weekday {
+          target_offset = Some((day - today_weekday) as i64);
+          break;
+        }
+      }
+      let fallback = repeat_rule
+        .day_of_week
+        .as_ref()
+        .and_then(|items| items.iter().min().copied())
+        .map(|day| {
+          let delta = (7 - today_weekday as i64) + day as i64;
+          if delta <= 0 { 7 } else { delta }
+        })?;
+
+      current_date.checked_add_signed(Duration::days(target_offset.unwrap_or(fallback)))?
+    }
+    "monthly" => {
+      let mut days = repeat_rule.day_of_month.clone().unwrap_or_default();
+      if days.is_empty() {
+        return None;
+      }
+      days.sort_unstable();
+      let current_day = current_date.day() as u8;
+
+      for day in &days {
+        if *day > current_day {
+          if let Some(candidate) =
+            NaiveDate::from_ymd_opt(current_date.year(), current_date.month(), *day as u32)
+          {
+            return Some(candidate.format("%Y-%m-%d").to_string());
+          }
+        }
+      }
+
+      let mut year = current_date.year();
+      let mut month = current_date.month();
+      for _ in 0..24 {
+        if month == 12 {
+          month = 1;
+          year += 1;
+        } else {
+          month += 1;
+        }
+
+        for day in &days {
+          if let Some(candidate) = NaiveDate::from_ymd_opt(year, month, *day as u32) {
+            return Some(candidate.format("%Y-%m-%d").to_string());
+          }
+        }
+      }
+      return None;
+    }
+    _ => return None,
+  };
+
+  Some(next.format("%Y-%m-%d").to_string())
+}
+
 #[tauri::command]
 fn get_app_snapshot(db: State<'_, DbState>) -> Result<AppSnapshot, String> {
   let conn = open_connection(&db.db_path)?;
 
+  Ok(AppSnapshot {
+    lists: load_lists(&conn)?,
+    tasks: load_tasks(&conn)?,
+    schemes: load_schemes(&conn)?,
+  })
+}
+
+#[tauri::command]
+fn export_backup(db: State<'_, DbState>, path: String) -> Result<String, String> {
+  let output_path = PathBuf::from(path.trim());
+  if output_path.as_os_str().is_empty() {
+    return Err("Backup path is required".to_string());
+  }
+
+  let conn = open_connection(&db.db_path)?;
+  let snapshot = AppSnapshot {
+    lists: load_lists(&conn)?,
+    tasks: load_tasks(&conn)?,
+    schemes: load_schemes(&conn)?,
+  };
+
+  let payload = BackupPayload {
+    version: 1,
+    exported_at: chrono::Utc::now().to_rfc3339(),
+    snapshot,
+  };
+
+  let content =
+    serde_json::to_string_pretty(&payload).map_err(|err| format!("Failed to encode backup: {err}"))?;
+  fs::write(&output_path, content).map_err(|err| format!("Failed to write backup file: {err}"))?;
+
+  Ok(output_path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+fn import_backup(db: State<'_, DbState>, path: String) -> Result<AppSnapshot, String> {
+  let input_path = PathBuf::from(path.trim());
+  if input_path.as_os_str().is_empty() {
+    return Err("Backup path is required".to_string());
+  }
+
+  let content = fs::read_to_string(&input_path)
+    .map_err(|err| format!("Failed to read backup file: {err}"))?;
+  let payload: BackupPayload =
+    serde_json::from_str(&content).map_err(|err| format!("Failed to parse backup file: {err}"))?;
+
+  if payload.version != 1 {
+    return Err("Unsupported backup version".to_string());
+  }
+  if payload.snapshot.lists.is_empty() {
+    return Err("Backup data is invalid: lists cannot be empty".to_string());
+  }
+
+  let mut conn = open_connection(&db.db_path)?;
+  persist_snapshot(&mut conn, &payload.snapshot)?;
+
+  let conn = open_connection(&db.db_path)?;
   Ok(AppSnapshot {
     lists: load_lists(&conn)?,
     tasks: load_tasks(&conn)?,
@@ -551,6 +799,35 @@ fn create_list(db: State<'_, DbState>, input: ListInput) -> Result<ListItem, Str
       params![list.id, list.name, list.icon],
     )
     .map_err(|err| format!("Failed to create list: {err}"))?;
+
+  Ok(list)
+}
+
+#[tauri::command]
+fn update_list(db: State<'_, DbState>, list_id: String, patch: ListInput) -> Result<ListItem, String> {
+  let name = patch.name.trim();
+  let icon = patch.icon.trim();
+  if name.is_empty() {
+    return Err("List name is required".to_string());
+  }
+
+  let list = ListItem {
+    id: list_id.clone(),
+    name: name.to_string(),
+    icon: if icon.is_empty() { "🗂️".to_string() } else { icon.to_string() },
+  };
+
+  let conn = open_connection(&db.db_path)?;
+  let affected = conn
+    .execute(
+      "UPDATE lists SET name = ?2, icon = ?3 WHERE id = ?1",
+      params![list.id, list.name, list.icon],
+    )
+    .map_err(|err| format!("Failed to update list: {err}"))?;
+
+  if affected == 0 {
+    return Err("List not found".to_string());
+  }
 
   Ok(list)
 }
@@ -799,29 +1076,104 @@ fn save_task(db: State<'_, DbState>, task: SaveTaskInput) -> Result<TaskItem, St
 
 #[tauri::command]
 fn toggle_task_completed(db: State<'_, DbState>, task_id: String) -> Result<TaskItem, String> {
-  let conn = open_connection(&db.db_path)?;
-  let current: Option<i64> = conn
-    .query_row(
-      "SELECT completed FROM tasks WHERE id = ?1",
-      params![task_id],
-      |row| row.get(0),
-    )
-    .optional()
-    .map_err(|err| format!("Failed to query task completion: {err}"))?;
+  let mut conn = open_connection(&db.db_path)?;
+  let task = fetch_task_by_id(&conn, &task_id)?;
+  let next = if task.completed { 0 } else { 1 };
 
-  let Some(completed) = current else {
-    return Err("Task not found".to_string());
-  };
+  let tx = conn
+    .transaction()
+    .map_err(|err| format!("Failed to start transaction: {err}"))?;
 
-  let next = if completed == 0 { 1 } else { 0 };
-  conn
+  tx
     .execute(
       "UPDATE tasks SET completed = ?2, updated_at = CURRENT_TIMESTAMP WHERE id = ?1",
       params![task_id, next],
     )
     .map_err(|err| format!("Failed to toggle task completion: {err}"))?;
 
+  if !task.completed && next == 1 {
+    if let Some(next_date) = compute_next_repeat_date(&task) {
+      let next_task_id = format!("task_{}", Uuid::new_v4());
+      let repeat_type = task.repeat_rule.as_ref().map(|rule| rule.rule_type.clone());
+      let repeat_day_of_week = task
+        .repeat_rule
+        .as_ref()
+        .and_then(|rule| rule.day_of_week.clone())
+        .map(|days| serde_json::to_string(&days))
+        .transpose()
+        .map_err(|err| format!("Failed to encode repeat days of week: {err}"))?;
+      let repeat_day_of_month = task
+        .repeat_rule
+        .as_ref()
+        .and_then(|rule| rule.day_of_month.clone())
+        .map(|days| serde_json::to_string(&days))
+        .transpose()
+        .map_err(|err| format!("Failed to encode repeat days of month: {err}"))?;
+
+      tx
+        .execute(
+          "INSERT INTO tasks (id, list_id, title, detail, completed, date, time, reminder, reminder_offset_minutes, repeat_type, repeat_day_of_week, repeat_day_of_month)
+           VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+          params![
+            next_task_id,
+            task.list_id,
+            task.title,
+            task.detail,
+            next_date,
+            task.time,
+            task.reminder.map(|v| if v { 1 } else { 0 }),
+            task.reminder_offset_minutes,
+            repeat_type,
+            repeat_day_of_week,
+            repeat_day_of_month
+          ],
+        )
+        .map_err(|err| format!("Failed to create next recurring task: {err}"))?;
+
+      if let Some(actions) = task.actions.as_ref() {
+        persist_task_actions(&tx, &next_task_id, actions)?;
+      }
+    }
+  }
+
+  tx
+    .commit()
+    .map_err(|err| format!("Failed to commit task toggle: {err}"))?;
+
+  let conn = open_connection(&db.db_path)?;
   fetch_task_by_id(&conn, &task_id)
+}
+
+#[tauri::command]
+fn delete_task(db: State<'_, DbState>, task_id: String) -> Result<(), String> {
+  let conn = open_connection(&db.db_path)?;
+  let affected = conn
+    .execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
+    .map_err(|err| format!("Failed to delete task: {err}"))?;
+
+  if affected == 0 {
+    return Err("Task not found".to_string());
+  }
+
+  Ok(())
+}
+
+#[tauri::command]
+fn delete_list(db: State<'_, DbState>, list_id: String) -> Result<(), String> {
+  if list_id == "list_today" {
+    return Err("Default list cannot be deleted".to_string());
+  }
+
+  let conn = open_connection(&db.db_path)?;
+  let affected = conn
+    .execute("DELETE FROM lists WHERE id = ?1", params![list_id])
+    .map_err(|err| format!("Failed to delete list: {err}"))?;
+
+  if affected == 0 {
+    return Err("List not found".to_string());
+  }
+
+  Ok(())
 }
 
 #[tauri::command]
@@ -890,15 +1242,21 @@ pub fn run() {
     })
     .plugin(tauri_plugin_shell::init())
     .plugin(tauri_plugin_dialog::init())
+    .plugin(tauri_plugin_notification::init())
     .invoke_handler(tauri::generate_handler![
       get_app_snapshot,
+      export_backup,
+      import_backup,
       create_list,
+      update_list,
       create_scheme,
       update_scheme,
       delete_scheme,
       create_task,
       save_task,
       toggle_task_completed,
+      delete_task,
+      delete_list,
       run_script
     ])
     .run(tauri::generate_context!())

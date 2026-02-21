@@ -1,6 +1,7 @@
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { AppSelect } from '../common/AppSelect';
 import type { RepeatType, Task } from '../../types/models';
 
 interface TaskEditModalProps {
@@ -93,16 +94,17 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
               <span className="mb-1 block text-xs text-gray-400">重复</span>
-              <select
+              <AppSelect
                 value={repeatType}
-                onChange={(event) => setRepeatType(event.target.value as RepeatType | 'none')}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
-              >
-                <option value="none">不重复</option>
-                <option value="daily">每天</option>
-                <option value="weekly">每周</option>
-                <option value="monthly">每月</option>
-              </select>
+                onChange={(value) => setRepeatType(value as RepeatType | 'none')}
+                options={[
+                  { value: 'none', label: '不重复' },
+                  { value: 'daily', label: '每天' },
+                  { value: 'weekly', label: '每周' },
+                  { value: 'monthly', label: '每月' },
+                ]}
+                className="w-full"
+              />
             </label>
             <label className="flex items-end">
               <span className="inline-flex items-center gap-2 rounded-md bg-gray-50 px-3 py-2 text-sm text-gray-600">

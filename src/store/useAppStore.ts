@@ -4,11 +4,16 @@ import {
   createList as createListInDb,
   createScheme as createSchemeInDb,
   createTask as createTaskInDb,
+  deleteList as deleteListInDb,
+  deleteTask as deleteTaskInDb,
   deleteScheme as deleteSchemeInDb,
+  exportBackup as exportBackupInDb,
   getAppSnapshot,
+  importBackup as importBackupInDb,
   saveTask as saveTaskInDb,
   toggleTaskCompleted as toggleTaskCompletedInDb,
   updateScheme as updateSchemeInDb,
+  updateList as updateListInDb,
 } from '../utils/backendApi';
 
 type ActiveView = 'list' | 'completed';
@@ -38,13 +43,18 @@ interface AppState {
   initFromBackend: () => Promise<void>;
   setActiveList: (listId: string) => void;
   addList: (input: Omit<List, 'id'>) => Promise<void>;
+  updateList: (listId: string, patch: Omit<List, 'id'>) => Promise<void>;
+  deleteList: (listId: string) => Promise<void>;
   setActiveView: (view: ActiveView) => void;
   toggleTaskCompleted: (taskId: string) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<void>;
   updateTask: (taskId: string, patch: Partial<Task>) => Promise<void>;
   addTaskFromDraft: (defaultListId: string, useDraftList: boolean) => Promise<void>;
   addScheme: (input: Omit<UrlScheme, 'id'>) => Promise<void>;
   updateScheme: (schemeId: string, patch: Omit<UrlScheme, 'id'>) => Promise<void>;
   deleteScheme: (schemeId: string) => Promise<void>;
+  exportBackup: (path: string) => Promise<string>;
+  importBackup: (path: string) => Promise<void>;
   updateDraftTask: (patch: Partial<DraftTask>) => void;
   resetDraftTask: () => void;
 }
@@ -66,6 +76,14 @@ const formatDate = (date: Date): string => {
 };
 
 const formatTime = (date: Date): string => `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+const normalizeTime = (value?: string): string | undefined => {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return /^\d{2}:\d{2}$/.test(trimmed) ? trimmed : undefined;
+};
 
 const roundToFiveMinutes = (date: Date): Date => {
   const cloned = new Date(date);
@@ -123,12 +141,13 @@ const inferDefaultSchedule = (
   const now = new Date();
   const hour = now.getHours();
   const hasDate = Boolean(draft.date);
-  const hasTime = Boolean(draft.time);
+  const normalizedDraftTime = normalizeTime(draft.time);
+  const hasTime = Boolean(normalizedDraftTime);
 
   if (hasDate && hasTime) {
     return {
       date: draft.date,
-      time: draft.time,
+      time: normalizedDraftTime,
       reminder: draft.reminder ?? true,
       reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
     };
@@ -141,7 +160,7 @@ const inferDefaultSchedule = (
 
     return {
       date: draft.date ?? formatDate(tomorrowMorning),
-      time: draft.time ?? formatTime(tomorrowMorning),
+      time: normalizedDraftTime ?? formatTime(tomorrowMorning),
       reminder: draft.reminder ?? true,
       reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
     };
@@ -150,7 +169,7 @@ const inferDefaultSchedule = (
   const roundedNow = roundToFiveMinutes(now);
   return {
     date: draft.date ?? formatDate(roundedNow),
-    time: draft.time ?? formatTime(roundedNow),
+    time: normalizedDraftTime ?? formatTime(roundedNow),
     reminder: draft.reminder ?? true,
     reminderOffsetMinutes: draft.reminderOffsetMinutes ?? 10,
   };
@@ -204,11 +223,45 @@ export const useAppStore = create<AppState>((set, get) => ({
       activeView: 'list',
     }));
   },
+  updateList: async (listId, patch) => {
+    const updated = await updateListInDb(listId, patch);
+    set((state) => ({
+      lists: state.lists.map((list) => (list.id === updated.id ? updated : list)),
+    }));
+  },
+  deleteList: async (listId) => {
+    await deleteListInDb(listId);
+    set((state) => {
+      const nextLists = state.lists.filter((list) => list.id !== listId);
+      const nextActiveListId =
+        state.activeListId === listId ? (nextLists[0]?.id ?? '') : state.activeListId;
+
+      return {
+        lists: nextLists,
+        tasks: state.tasks.map((task) =>
+          task.listId === listId
+            ? {
+                ...task,
+                listId: undefined,
+              }
+            : task,
+        ),
+        activeListId: nextActiveListId,
+        activeView: state.activeView === 'completed' ? 'completed' : 'list',
+      };
+    });
+  },
   setActiveView: (view) => set({ activeView: view }),
   toggleTaskCompleted: async (taskId) => {
     const updated = await toggleTaskCompletedInDb(taskId);
     set((state) => ({
       tasks: state.tasks.map((task) => (task.id === updated.id ? updated : task)),
+    }));
+  },
+  deleteTask: async (taskId) => {
+    await deleteTaskInDb(taskId);
+    set((state) => ({
+      tasks: state.tasks.filter((task) => task.id !== taskId),
     }));
   },
   updateTask: async (taskId, patch) => {
@@ -286,6 +339,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.draftTask,
         actions: state.draftTask.actions.filter((action) => action.schemeId !== schemeId),
       },
+    }));
+  },
+  exportBackup: async (path) => exportBackupInDb(path),
+  importBackup: async (path) => {
+    const snapshot = await importBackupInDb(path);
+    set((state) => ({
+      lists: snapshot.lists,
+      tasks: snapshot.tasks,
+      schemes: snapshot.schemes,
+      activeListId:
+        state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
+          ? state.activeListId
+          : (snapshot.lists[0]?.id ?? ''),
+      activeView: 'list',
+      draftTask: initialDraftTask,
     }));
   },
   updateDraftTask: (patch) =>

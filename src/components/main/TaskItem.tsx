@@ -1,4 +1,4 @@
-import { Pencil } from 'lucide-react';
+import { Pencil, Trash2 } from 'lucide-react';
 import type { List, Task, UrlScheme } from '../../types/models';
 
 interface TaskItemProps {
@@ -7,6 +7,7 @@ interface TaskItemProps {
   list?: List;
   showListInfo?: boolean;
   onToggleCompleted: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
   onEditTask: (task: Task) => void;
 }
@@ -17,6 +18,7 @@ export function TaskItem({
   list,
   showListInfo,
   onToggleCompleted,
+  onDeleteTask,
   onExecuteAction,
   onEditTask,
 }: TaskItemProps) {
@@ -67,6 +69,14 @@ export function TaskItem({
         title="编辑任务"
       >
         <Pencil size={14} />
+      </button>
+      <button
+        type="button"
+        onClick={() => onDeleteTask(task.id)}
+        className="rounded-xl p-1.5 text-gray-400 transition hover:bg-red-50 hover:text-red-500"
+        title="删除任务"
+      >
+        <Trash2 size={14} />
       </button>
 
       {hasActionBinding ? (

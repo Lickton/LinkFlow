@@ -1,6 +1,7 @@
 import { Bell, Calendar, ChevronDown, Clock3, Link2, Repeat2 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
+import { AppSelect } from '../common/AppSelect';
 import type { List, RepeatType } from '../../types/models';
 
 interface ActionPreview {
@@ -70,34 +71,27 @@ export function TaskInputArea({
 }: TaskInputAreaProps) {
   const dateInputRef = useRef<HTMLInputElement>(null);
   const timeInputRef = useRef<HTMLInputElement>(null);
-  const listMenuRef = useRef<HTMLDivElement>(null);
   const [activePanel, setActivePanel] = useState<'detail' | 'time' | 'reminder' | 'repeat' | null>(
     null,
   );
-  const [listMenuOpen, setListMenuOpen] = useState(false);
+  const [timeDraft, setTimeDraft] = useState(time ?? '');
 
   const monthDaysText = useMemo(() => repeatDaysOfMonth.join(','), [repeatDaysOfMonth]);
-  const selectedList = useMemo(
-    () => (lists ?? []).find((item) => item.id === selectedListId),
-    [lists, selectedListId],
-  );
+  const canSubmit = value.trim().length > 0;
 
   useEffect(() => {
-    if (!listMenuOpen) {
-      return;
-    }
+    setTimeDraft(time ?? '');
+  }, [time]);
 
-    const handlePointerDown = (event: PointerEvent) => {
-      if (listMenuRef.current && !listMenuRef.current.contains(event.target as Node)) {
-        setListMenuOpen(false);
-      }
-    };
+  const commitTimeDraft = () => {
+    const normalized = timeDraft.trim();
+    onTimeChange(normalized ? normalized : undefined);
+  };
 
-    document.addEventListener('pointerdown', handlePointerDown);
-    return () => document.removeEventListener('pointerdown', handlePointerDown);
-  }, [listMenuOpen]);
-
-  const canSubmit = value.trim().length > 0;
+  const applyTimeDraft = (nextValue: string) => {
+    setTimeDraft(nextValue);
+    onTimeChange(nextValue || undefined);
+  };
 
   const repeatLabel =
     repeatType === 'none'
@@ -109,7 +103,7 @@ export function TaskInputArea({
           : `每月(${repeatDaysOfMonth.length})`;
 
   const reminderLabel = reminder
-    ? `提醒(${reminderOffsetMinutes ?? 10}m前)`
+    ? `提醒(${reminderOffsetMinutes ?? 10}分钟前)`
     : '提醒';
 
   return (
@@ -123,7 +117,10 @@ export function TaskInputArea({
         />
         <button
           type="button"
-          onClick={onSubmit}
+          onClick={() => {
+            commitTimeDraft();
+            onSubmit();
+          }}
           disabled={!canSubmit}
           className={`rounded-xl px-3 py-2 text-xs font-medium transition ${
             canSubmit
@@ -183,59 +180,19 @@ export function TaskInputArea({
         <ToolbarButton icon={<Link2 size={14} />} label="动作" highlight onClick={onOpenActionPicker} />
 
         {showListPicker ? (
-          <div ref={listMenuRef} className="relative ml-auto">
-            <button
-              type="button"
-              onClick={() => setListMenuOpen((prev) => !prev)}
-              className="inline-flex h-9 items-center gap-2 rounded-2xl border border-transparent bg-transparent px-3 text-[13px] font-medium text-gray-600 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-linkflow-accent/15"
-            >
-              <span className="inline-flex items-center gap-2">
-                <span className="text-gray-400">列表</span>
-                <span className="inline-flex items-center gap-2 text-gray-700">
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-gray-100 text-gray-600">
-                    {selectedList?.icon ?? '∅'}
-                  </span>
-                  {selectedList?.name ?? '无'}
-                </span>
-              </span>
-              <ChevronDown className="h-4 w-4 text-gray-400" />
-            </button>
-
-            {listMenuOpen ? (
-              <div className="absolute right-0 top-full z-20 mt-2 min-w-48 rounded-2xl border border-gray-200/70 bg-white p-1 shadow-[0_8px_24px_rgba(0,0,0,0.06)]">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onSelectedListChange?.(null);
-                    setListMenuOpen(false);
-                  }}
-                  className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left text-[13px] font-medium text-gray-700 transition hover:bg-gray-50"
-                >
-                  <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-gray-100 text-gray-600">
-                    ∅
-                  </span>
-                  无
-                </button>
-
-                {(lists ?? []).map((list) => (
-                  <button
-                    key={list.id}
-                    type="button"
-                    onClick={() => {
-                      onSelectedListChange?.(list.id);
-                      setListMenuOpen(false);
-                    }}
-                    className="flex h-9 w-full items-center gap-2 rounded-xl px-3 text-left text-[13px] font-medium text-gray-700 transition hover:bg-gray-50"
-                  >
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-md bg-gray-100 text-gray-600">
-                      {list.icon}
-                    </span>
-                    {list.name}
-                  </button>
-                ))}
-              </div>
-            ) : null}
-          </div>
+          <AppSelect
+            value={selectedListId ?? '__none__'}
+            onChange={(value) => onSelectedListChange?.(value === '__none__' ? null : value)}
+            options={[
+              { value: '__none__', label: '无', icon: '∅' },
+              ...((lists ?? []).map((list) => ({
+                value: list.id,
+                label: list.name,
+                icon: list.icon,
+              })) as { value: string; label: string; icon: string }[]),
+            ]}
+            className="ml-auto w-48"
+          />
         ) : null}
       </div>
 
@@ -259,19 +216,35 @@ export function TaskInputArea({
               <input
                 ref={timeInputRef}
                 type="time"
-                value={time ?? ''}
-                onChange={(event) => onTimeChange(event.target.value || undefined)}
+                value={timeDraft}
+                onInput={(event) => applyTimeDraft((event.target as HTMLInputElement).value)}
+                onChange={(event) => applyTimeDraft(event.target.value)}
                 className="h-8 w-[118px] rounded-2xl border border-gray-200/60 bg-white px-3 py-2 text-[14px] font-light tracking-[0.01em] text-gray-600 outline-none transition-all duration-150 hover:border-gray-300/70 hover:bg-gray-50 focus:border-gray-300 focus:ring-2 focus:ring-linkflow-accent/15"
               />
-              {time ? (
+              {timeDraft ? (
                 <button
                   type="button"
-                  onClick={() => onTimeChange(undefined)}
+                  onClick={() => {
+                    setTimeDraft('');
+                    onTimeChange(undefined);
+                  }}
                   className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-500 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
                 >
                   清除
                 </button>
               ) : null}
+              <button
+                type="button"
+                onClick={() => {
+                  const committed = timeInputRef.current?.value ?? timeDraft;
+                  setTimeDraft(committed);
+                  onTimeChange(committed || undefined);
+                  setActivePanel(null);
+                }}
+                className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
+              >
+                确认
+              </button>
             </div>
           ) : null}
 
@@ -329,16 +302,17 @@ export function TaskInputArea({
             <div className="flex flex-col gap-2">
           <div className="flex flex-wrap items-center gap-2">
             <label className="text-xs text-gray-400">重复</label>
-            <select
+            <AppSelect
               value={repeatType}
-              onChange={(event) => onRepeatTypeChange(event.target.value as RepeatType | 'none')}
-              className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 outline-none focus:ring-2 focus:ring-linkflow-accent/20"
-            >
-              <option value="none">不重复</option>
-              <option value="daily">每天</option>
-              <option value="weekly">每周</option>
-              <option value="monthly">每月</option>
-            </select>
+              onChange={(value) => onRepeatTypeChange(value as RepeatType | 'none')}
+              options={[
+                { value: 'none', label: '不重复' },
+                { value: 'daily', label: '每天' },
+                { value: 'weekly', label: '每周' },
+                { value: 'monthly', label: '每月' },
+              ]}
+              className="w-28"
+            />
           </div>
 
               {repeatType === 'weekly' ? (

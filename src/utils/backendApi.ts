@@ -32,9 +32,24 @@ export async function getAppSnapshot(): Promise<AppSnapshot> {
   return invoke<AppSnapshot>('get_app_snapshot');
 }
 
+export async function exportBackup(path: string): Promise<string> {
+  ensureTauri();
+  return invoke<string>('export_backup', { path });
+}
+
+export async function importBackup(path: string): Promise<AppSnapshot> {
+  ensureTauri();
+  return invoke<AppSnapshot>('import_backup', { path });
+}
+
 export async function createList(input: Omit<List, 'id'>): Promise<List> {
   ensureTauri();
   return invoke<List>('create_list', { input });
+}
+
+export async function updateList(listId: string, patch: Omit<List, 'id'>): Promise<List> {
+  ensureTauri();
+  return invoke<List>('update_list', { listId, patch });
 }
 
 export async function createScheme(input: SchemeDraftInput): Promise<UrlScheme> {
@@ -65,4 +80,14 @@ export async function saveTask(task: Task): Promise<Task> {
 export async function toggleTaskCompleted(taskId: string): Promise<Task> {
   ensureTauri();
   return invoke<Task>('toggle_task_completed', { taskId });
+}
+
+export async function deleteTask(taskId: string): Promise<void> {
+  ensureTauri();
+  await invoke('delete_task', { taskId });
+}
+
+export async function deleteList(listId: string): Promise<void> {
+  ensureTauri();
+  await invoke('delete_list', { listId });
 }

@@ -1,4 +1,5 @@
 import type { List, RepeatType, Task, UrlScheme } from '../../types/models';
+import { AppSelect } from '../common/AppSelect';
 import { Header } from './Header';
 import { TaskInputArea } from './TaskInputArea';
 import { TaskList } from './TaskList';
@@ -28,6 +29,8 @@ interface MainContentProps {
   draftRepeatDaysOfMonth: number[];
   draftActions?: MainContentActionPreview[];
   draftListId?: string | null;
+  searchQuery: string;
+  taskFilter: 'all' | 'today' | 'overdue' | 'upcoming';
   onDraftTitleChange: (value: string) => void;
   onDraftDetailChange: (value: string) => void;
   onDraftDateChange: (value?: string) => void;
@@ -40,7 +43,10 @@ interface MainContentProps {
   onDraftListChange: (value: string | null) => void;
   onSubmitTask: () => void;
   onOpenActionPicker: () => void;
+  onSearchChange: (value: string) => void;
+  onTaskFilterChange: (value: 'all' | 'today' | 'overdue' | 'upcoming') => void;
   onToggleCompleted: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
   onEditTask: (task: Task) => void;
 }
@@ -64,6 +70,8 @@ export function MainContent({
   draftRepeatDaysOfMonth,
   draftActions,
   draftListId,
+  searchQuery,
+  taskFilter,
   onDraftTitleChange,
   onDraftDetailChange,
   onDraftDateChange,
@@ -76,16 +84,14 @@ export function MainContent({
   onDraftListChange,
   onSubmitTask,
   onOpenActionPicker,
+  onSearchChange,
+  onTaskFilterChange,
   onToggleCompleted,
+  onDeleteTask,
   onExecuteAction,
   onEditTask,
 }: MainContentProps) {
-  const subtitle =
-    activeView === 'completed'
-      ? '全部已完成任务'
-      : isAllTasksView
-        ? '全部未完成任务'
-        : '当前列表中的未完成任务';
+  const subtitle = activeView === 'completed' ? '全部已完成任务' : '';
 
   return (
     <section className="flex min-w-0 flex-1 flex-col bg-white p-6">
@@ -121,12 +127,33 @@ export function MainContent({
         />
       )}
 
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <input
+          value={searchQuery}
+          onChange={(event) => onSearchChange(event.target.value)}
+          placeholder="搜索任务标题或详情"
+          className="h-9 min-w-48 flex-1 rounded-xl border border-gray-200/70 bg-white px-3 text-sm text-gray-700 outline-none focus:ring-2 focus:ring-linkflow-accent/15"
+        />
+        <AppSelect
+          value={taskFilter}
+          onChange={(value) => onTaskFilterChange(value as 'all' | 'today' | 'overdue' | 'upcoming')}
+          options={[
+            { value: 'all', label: '全部时间' },
+            { value: 'today', label: '今天' },
+            { value: 'overdue', label: '逾期' },
+            { value: 'upcoming', label: '未来' },
+          ]}
+          className="w-32"
+        />
+      </div>
+
       <TaskList
         tasks={visibleTasks}
         lists={lists}
         schemes={schemes}
         showListInfo={isAllTasksView}
         onToggleCompleted={onToggleCompleted}
+        onDeleteTask={onDeleteTask}
         onExecuteAction={onExecuteAction}
         onEditTask={onEditTask}
       />

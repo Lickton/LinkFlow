@@ -1,4 +1,9 @@
 import { isTauri } from '@tauri-apps/api/core';
+import {
+  isPermissionGranted,
+  requestPermission,
+  sendNotification,
+} from '@tauri-apps/plugin-notification';
 import { useEffect, useRef, useState } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import { MainContent } from './components/main/MainContent';
@@ -8,7 +13,7 @@ import { TaskEditModal } from './components/modals/TaskEditModal';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { useAppStore } from './store/useAppStore';
 import { executeTaskAction } from './utils/actionEngine';
-import type { Task } from './types/models';
+import type { List, Task } from './types/models';
 
 const ALL_TASKS_LIST_ID = 'list_today';
 
@@ -26,14 +31,19 @@ function App() {
     initFromBackend,
     setActiveList,
     addList,
+    updateList,
+    deleteList,
     setActiveView,
     updateDraftTask,
     addTaskFromDraft,
     toggleTaskCompleted,
+    deleteTask,
     updateTask,
     addScheme,
     updateScheme,
     deleteScheme,
+    exportBackup,
+    importBackup,
   } = useAppStore();
   const [isActionPickerOpen, setIsActionPickerOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -42,7 +52,13 @@ function App() {
   const [newListName, setNewListName] = useState('');
   const [newListIcon, setNewListIcon] = useState('🗂️');
   const [isCreatingList, setIsCreatingList] = useState(false);
+  const [editingList, setEditingList] = useState<List | null>(null);
+  const [editListIcon, setEditListIcon] = useState('🗂️');
+  const [isUpdatingList, setIsUpdatingList] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [taskFilter, setTaskFilter] = useState<'all' | 'today' | 'overdue' | 'upcoming'>('all');
   const executedScriptTaskKeysRef = useRef<Set<string>>(new Set());
+  const notifiedReminderKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!isTauri()) {
@@ -71,12 +87,39 @@ function App() {
   const editingTask = tasks.find((task) => task.id === editingTaskId);
   const isAllTasksView = activeView === 'list' && activeListId === ALL_TASKS_LIST_ID;
 
-  const visibleTasks =
+  const baseTasks =
     activeView === 'completed'
       ? tasks.filter((task) => task.completed)
       : isAllTasksView
         ? tasks.filter((task) => !task.completed)
         : tasks.filter((task) => task.listId === activeListId && !task.completed);
+
+  const todayDate = new Date().toISOString().slice(0, 10);
+  const normalizedKeyword = searchQuery.trim().toLowerCase();
+
+  const visibleTasks = baseTasks.filter((task) => {
+    if (normalizedKeyword) {
+      const haystack = `${task.title} ${task.detail ?? ''}`.toLowerCase();
+      if (!haystack.includes(normalizedKeyword)) {
+        return false;
+      }
+    }
+
+    if (activeView === 'completed') {
+      return true;
+    }
+
+    if (taskFilter === 'today') {
+      return task.date === todayDate;
+    }
+    if (taskFilter === 'overdue') {
+      return Boolean(task.date) && (task.date ?? '') < todayDate;
+    }
+    if (taskFilter === 'upcoming') {
+      return Boolean(task.date) && (task.date ?? '') > todayDate;
+    }
+    return true;
+  });
 
   const title = activeView === 'completed' ? '✅ 已完成' : activeList?.name ?? '列表';
 
@@ -129,6 +172,58 @@ function App() {
     });
   };
 
+  const handleDeleteTask = (taskId: string) => {
+    if (!window.confirm('确认删除这个任务吗？')) {
+      return;
+    }
+
+    void deleteTask(taskId).catch((error) => {
+      console.error('Failed to delete task', error);
+      window.alert('删除任务失败，请稍后重试。');
+    });
+  };
+
+  const handleUpdateList = (list: (typeof lists)[number]) => {
+    setEditingList(list);
+    setEditListIcon(list.icon);
+  };
+
+  const handleDeleteList = (list: (typeof lists)[number]) => {
+    if (list.id === ALL_TASKS_LIST_ID) {
+      return;
+    }
+    if (!window.confirm(`确认删除列表「${list.name}」吗？该列表下任务会变成“无列表”。`)) {
+      return;
+    }
+    void deleteList(list.id).catch((error) => {
+      console.error('Failed to delete list', error);
+      window.alert('删除列表失败，请稍后重试。');
+    });
+  };
+
+  const submitUpdateList = () => {
+    if (!editingList || isUpdatingList) {
+      return;
+    }
+
+    setIsUpdatingList(true);
+    void updateList(editingList.id, {
+      name: editingList.name,
+      icon: editListIcon.trim() || editingList.icon || '🗂️',
+    })
+      .then(() => {
+        setEditingList(null);
+        setEditListIcon('🗂️');
+      })
+      .catch((error) => {
+        console.error('Failed to update list', error);
+        window.alert('编辑列表失败，请稍后重试。');
+      })
+      .finally(() => {
+        setIsUpdatingList(false);
+      });
+  };
+
   const handleExecuteAction = async (task: Task, actionSchemeId: string) => {
     const action = (task.actions ?? []).find((item) => item.schemeId === actionSchemeId);
     const scheme = schemes.find((item) => item.id === actionSchemeId);
@@ -153,7 +248,28 @@ function App() {
       return;
     }
 
-    const runDueScriptTasks = async () => {
+    let notificationPermissionChecked = false;
+    let notificationGranted = false;
+
+    const ensureNotificationPermission = async (): Promise<boolean> => {
+      if (notificationPermissionChecked) {
+        return notificationGranted;
+      }
+
+      const granted = await isPermissionGranted();
+      if (granted) {
+        notificationPermissionChecked = true;
+        notificationGranted = true;
+        return true;
+      }
+
+      const permission = await requestPermission();
+      notificationPermissionChecked = true;
+      notificationGranted = permission === 'granted';
+      return notificationGranted;
+    };
+
+    const runDueTasks = async () => {
       const now = Date.now();
       for (const task of tasks) {
         if (task.completed || !task.date || !task.time) {
@@ -163,6 +279,25 @@ function App() {
         const dueAt = new Date(`${task.date}T${task.time}:00`).getTime();
         if (!Number.isFinite(dueAt) || dueAt > now) {
           continue;
+        }
+
+        if (task.reminder) {
+          const reminderOffsetMinutes = Math.max(0, task.reminderOffsetMinutes ?? 10);
+          const remindAt = dueAt - reminderOffsetMinutes * 60_000;
+          const reminderKey = `${task.id}|${task.date}|${task.time}|${reminderOffsetMinutes}`;
+          if (remindAt <= now && !notifiedReminderKeysRef.current.has(reminderKey)) {
+            try {
+              if (await ensureNotificationPermission()) {
+                sendNotification({
+                  title: `任务提醒：${task.title}`,
+                  body: task.detail?.trim() || `计划时间 ${task.date} ${task.time}`,
+                });
+                notifiedReminderKeysRef.current.add(reminderKey);
+              }
+            } catch (error) {
+              console.error('Failed to send reminder notification', error);
+            }
+          }
         }
 
         const taskActions = task.actions ?? [];
@@ -188,10 +323,10 @@ function App() {
     };
 
     const timer = window.setInterval(() => {
-      void runDueScriptTasks();
+      void runDueTasks();
     }, 30_000);
 
-    void runDueScriptTasks();
+    void runDueTasks();
 
     return () => window.clearInterval(timer);
   }, [schemes, tasks]);
@@ -248,6 +383,8 @@ function App() {
             activeView={activeView}
             onListClick={setActiveList}
             onCreateList={handleCreateList}
+            onUpdateList={handleUpdateList}
+            onDeleteList={handleDeleteList}
             onCompletedClick={() => setActiveView('completed')}
             onOpenSettings={() => setIsSettingsOpen(true)}
           />
@@ -272,6 +409,8 @@ function App() {
             draftRepeatDaysOfWeek={draftTask.repeat?.dayOfWeek ?? []}
             draftRepeatDaysOfMonth={draftTask.repeat?.dayOfMonth ?? []}
             draftActions={draftActionPreviews}
+            searchQuery={searchQuery}
+            taskFilter={taskFilter}
             onDraftTitleChange={(value) => updateDraftTask({ title: value })}
             onDraftDetailChange={(value) => updateDraftTask({ detail: value })}
             onDraftDateChange={(value) => updateDraftTask({ date: value })}
@@ -344,7 +483,10 @@ function App() {
             onDraftListChange={(value) => updateDraftTask({ listId: value })}
             onSubmitTask={handleSubmitTask}
             onOpenActionPicker={() => setIsActionPickerOpen(true)}
+            onSearchChange={setSearchQuery}
+            onTaskFilterChange={setTaskFilter}
             onToggleCompleted={handleToggleCompleted}
+            onDeleteTask={handleDeleteTask}
             onExecuteAction={handleExecuteAction}
             onEditTask={(task) => setEditingTaskId(task.id)}
           />
@@ -364,6 +506,8 @@ function App() {
         onCreate={addScheme}
         onUpdate={updateScheme}
         onDelete={deleteScheme}
+        onExportBackup={exportBackup}
+        onImportBackup={importBackup}
       />
       <TaskEditModal
         task={editingTask}
@@ -416,6 +560,53 @@ function App() {
                 className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isCreatingList ? '创建中...' : '创建'}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+      {editingList ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <div className="w-full max-w-md rounded-xl bg-white p-5 shadow-lg">
+            <h3 className="mb-4 text-lg font-semibold text-gray-800">编辑任务列表</h3>
+            <div className="space-y-3">
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-400">列表名称</span>
+                <div className="w-full rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-500">
+                  {editingList.name}
+                </div>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs text-gray-400">图标（可修改）</span>
+                <input
+                  value={editListIcon}
+                  onChange={(event) => setEditListIcon(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      submitUpdateList();
+                    }
+                  }}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
+                  placeholder="🗂️"
+                  autoFocus
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setEditingList(null)}
+                className="rounded-lg px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100"
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={isUpdatingList}
+                onClick={submitUpdateList}
+                className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isUpdatingList ? '保存中...' : '保存'}
               </button>
             </div>
           </div>

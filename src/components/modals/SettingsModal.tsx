@@ -3,7 +3,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { isTauri } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
+import { AppSelect } from '../common/AppSelect';
 import type { UrlScheme } from '../../types/models';
 
 type SchemeDraft = Omit<UrlScheme, 'id'>;
@@ -25,6 +26,8 @@ interface SettingsModalProps {
   onCreate: (input: SchemeDraft) => Promise<void>;
   onUpdate: (schemeId: string, patch: SchemeDraft) => Promise<void>;
   onDelete: (schemeId: string) => Promise<void>;
+  onExportBackup: (path: string) => Promise<string>;
+  onImportBackup: (path: string) => Promise<void>;
 }
 
 export function SettingsModal({
@@ -34,6 +37,8 @@ export function SettingsModal({
   onCreate,
   onUpdate,
   onDelete,
+  onExportBackup,
+  onImportBackup,
 }: SettingsModalProps) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draft, setDraft] = useState<SchemeDraft>(emptyDraft);
@@ -153,6 +158,68 @@ export function SettingsModal({
     }
   };
 
+  const handleExportBackup = async () => {
+    if (!isTauri()) {
+      window.alert('导出备份仅支持 Tauri 桌面端。');
+      return;
+    }
+
+    const datePart = new Date().toISOString().slice(0, 10);
+    const selected = await save({
+      title: '导出备份',
+      defaultPath: `linkflow-backup-${datePart}.json`,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+
+    if (!selected || Array.isArray(selected)) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      const outputPath = await onExportBackup(selected);
+      setSavedNotice(`备份已导出：${outputPath}`);
+    } catch (error) {
+      console.error('Failed to export backup', error);
+      window.alert('导出备份失败，请稍后重试。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleImportBackup = async () => {
+    if (!isTauri()) {
+      window.alert('导入备份仅支持 Tauri 桌面端。');
+      return;
+    }
+
+    const selected = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'JSON', extensions: ['json'] }],
+    });
+    const filePath = Array.isArray(selected) ? selected[0] : selected;
+    if (typeof filePath !== 'string' || !filePath.trim()) {
+      return;
+    }
+
+    const confirm = window.confirm('导入会覆盖当前全部数据，是否继续？');
+    if (!confirm) {
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+      await onImportBackup(filePath.trim());
+      setSavedNotice('备份导入成功');
+    } catch (error) {
+      console.error('Failed to import backup', error);
+      window.alert('导入备份失败，请检查文件格式。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const content = (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
       <div className="flex h-[70vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-lg">
@@ -228,20 +295,21 @@ export function SettingsModal({
 
             <label className="sm:col-span-2">
               <span className="mb-1 block text-xs text-gray-400">动作类型</span>
-              <select
+              <AppSelect
                 value={draft.kind ?? 'url'}
-                onChange={(event) =>
+                onChange={(value) =>
                   setDraft((prev) => ({
                     ...prev,
-                    kind: event.target.value as SchemeDraft['kind'],
-                    paramType: event.target.value === 'script' ? 'string' : prev.paramType,
+                    kind: value as SchemeDraft['kind'],
+                    paramType: value === 'script' ? 'string' : prev.paramType,
                   }))
                 }
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none ring-linkflow-accent/20 focus:ring"
-              >
-                <option value="url">URL Scheme</option>
-                <option value="script">本地脚本</option>
-              </select>
+                options={[
+                  { value: 'url', label: 'URL Scheme' },
+                  { value: 'script', label: '本地脚本' },
+                ]}
+                className="w-full"
+              />
             </label>
 
             {draft.kind !== 'script' ? (
@@ -264,19 +332,20 @@ export function SettingsModal({
 
                 <label className="block">
                   <span className="mb-1 block text-xs text-gray-400">参数类型</span>
-                  <select
+                  <AppSelect
                     value={draft.paramType}
-                    onChange={(event) =>
+                    onChange={(value) =>
                       setDraft((prev) => ({
                         ...prev,
-                        paramType: event.target.value as SchemeDraft['paramType'],
+                        paramType: value as SchemeDraft['paramType'],
                       }))
                     }
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none ring-linkflow-accent/20 focus:ring"
-                  >
-                    <option value="string">文本</option>
-                    <option value="number">仅数字</option>
-                  </select>
+                    options={[
+                      { value: 'string', label: '文本' },
+                      { value: 'number', label: '仅数字' },
+                    ]}
+                    className="w-full"
+                  />
                 </label>
               </>
             ) : (
@@ -320,15 +389,33 @@ export function SettingsModal({
           </div>
 
           <div className="mt-auto flex items-center justify-between border-t border-gray-100 pt-4">
-            <button
-              type="button"
-              disabled={!selectedId || isSubmitting}
-              onClick={() => void handleDelete()}
-              className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-red-500 transition enabled:hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-300"
-            >
-              <Trash2 size={14} />
-              删除
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => void handleExportBackup()}
+                className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition enabled:hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                导出备份
+              </button>
+              <button
+                type="button"
+                disabled={isSubmitting}
+                onClick={() => void handleImportBackup()}
+                className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition enabled:hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                导入备份
+              </button>
+              <button
+                type="button"
+                disabled={!selectedId || isSubmitting}
+                onClick={() => void handleDelete()}
+                className="inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm text-red-500 transition enabled:hover:bg-red-50 disabled:cursor-not-allowed disabled:text-gray-300"
+              >
+                <Trash2 size={14} />
+                删除
+              </button>
+            </div>
 
             <div className="flex items-center gap-2">
               <button

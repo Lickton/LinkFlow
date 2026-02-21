@@ -7,6 +7,7 @@ interface TaskListProps {
   schemes: UrlScheme[];
   showListInfo?: boolean;
   onToggleCompleted: (taskId: string) => void;
+  onDeleteTask: (taskId: string) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
   onEditTask: (task: Task) => void;
 }
@@ -17,6 +18,7 @@ export function TaskList({
   schemes,
   showListInfo,
   onToggleCompleted,
+  onDeleteTask,
   onExecuteAction,
   onEditTask,
 }: TaskListProps) {
@@ -40,6 +42,7 @@ export function TaskList({
             list={list}
             showListInfo={showListInfo}
             onToggleCompleted={onToggleCompleted}
+            onDeleteTask={onDeleteTask}
             onExecuteAction={onExecuteAction}
             onEditTask={onEditTask}
           />

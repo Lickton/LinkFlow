@@ -1,6 +1,5 @@
 import { Plus, Trash2, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import type { DragEvent } from 'react';
 import { createPortal } from 'react-dom';
 import { isTauri } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
@@ -16,8 +15,6 @@ const emptyDraft: SchemeDraft = {
   kind: 'url',
   paramType: 'string',
 };
-
-const isAbsolutePath = (value: string): boolean => /^\/|^[A-Za-z]:\\/.test(value);
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -78,9 +75,7 @@ export function SettingsModal({
     return null;
   }
 
-  const isScript = draft.kind === 'script';
-  const isPathValid = !isScript || isAbsolutePath(draft.template.trim());
-  const isValid = draft.name.trim().length > 0 && draft.template.trim().length > 0 && isPathValid;
+  const isValid = draft.name.trim().length > 0 && draft.template.trim().length > 0;
 
   const handleDelete = async () => {
     if (!selectedId) {
@@ -118,43 +113,6 @@ export function SettingsModal({
       window.alert('保存动作失败，请稍后重试。');
     } finally {
       setIsSubmitting(false);
-    }
-  };
-
-  const handleDropPath = (event: DragEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    event.stopPropagation();
-
-    const droppedText = event.dataTransfer.getData('text/plain')?.trim();
-    if (droppedText.startsWith('/')) {
-      setDraft((prev) => ({ ...prev, template: droppedText }));
-      return;
-    }
-
-    const droppedFile = event.dataTransfer.files?.[0] as File & { path?: string };
-    const droppedPath = droppedFile?.path?.trim();
-    if (droppedPath && droppedPath.startsWith('/')) {
-      setDraft((prev) => ({ ...prev, template: droppedPath }));
-    }
-  };
-
-  const chooseScriptPath = async () => {
-    if (!isTauri()) {
-      window.alert('脚本文件选择仅支持 Tauri 桌面端。请直接粘贴绝对路径。');
-      return;
-    }
-
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: false,
-      });
-      const filePath = Array.isArray(selected) ? selected[0] : selected;
-      if (typeof filePath === 'string' && filePath.trim()) {
-        setDraft((prev) => ({ ...prev, template: filePath.trim() }));
-      }
-    } catch (error) {
-      console.error('Failed to pick script path', error);
     }
   };
 
@@ -301,91 +259,46 @@ export function SettingsModal({
                   setDraft((prev) => ({
                     ...prev,
                     kind: value as SchemeDraft['kind'],
-                    paramType: value === 'script' ? 'string' : prev.paramType,
                   }))
                 }
-                options={[
-                  { value: 'url', label: 'URL Scheme' },
-                  { value: 'script', label: '本地脚本' },
-                ]}
+                options={[{ value: 'url', label: 'URL Scheme' }]}
                 className="w-full"
               />
             </label>
 
-            {draft.kind !== 'script' ? (
-              <>
-                <label className="sm:col-span-2">
-                  <span className="mb-1 block text-xs text-gray-400">URL 模板</span>
-                  <input
-                    value={draft.template}
-                    onChange={(event) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        template: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none ring-linkflow-accent/20 focus:ring"
-                    placeholder="例如：wemeet://inmeeting?code={param} 或 wechat://"
-                  />
-                  <p className="mt-1 text-xs text-gray-400">模板可包含或不包含 {'{param}'} 占位符。</p>
-                </label>
+            <label className="sm:col-span-2">
+              <span className="mb-1 block text-xs text-gray-400">URL 模板</span>
+              <input
+                value={draft.template}
+                onChange={(event) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    template: event.target.value,
+                  }))
+                }
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none ring-linkflow-accent/20 focus:ring"
+                placeholder="例如：wemeet://inmeeting?code={param} 或 wechat://"
+              />
+              <p className="mt-1 text-xs text-gray-400">模板可包含或不包含 {'{param}'} 占位符。</p>
+            </label>
 
-                <label className="block">
-                  <span className="mb-1 block text-xs text-gray-400">参数类型</span>
-                  <AppSelect
-                    value={draft.paramType}
-                    onChange={(value) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        paramType: value as SchemeDraft['paramType'],
-                      }))
-                    }
-                    options={[
-                      { value: 'string', label: '文本' },
-                      { value: 'number', label: '仅数字' },
-                    ]}
-                    className="w-full"
-                  />
-                </label>
-              </>
-            ) : (
-              <div className="sm:col-span-2 space-y-2">
-                <label className="block">
-                  <span className="mb-1 block text-xs text-gray-400">脚本绝对路径</span>
-                  <input
-                    value={draft.template}
-                    onChange={(event) =>
-                      setDraft((prev) => ({
-                        ...prev,
-                        template: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-800 outline-none ring-linkflow-accent/20 focus:ring"
-                    placeholder="/Users/you/scripts/run.sh"
-                  />
-                  <p className="mt-1 text-xs text-gray-400">仅支持绝对路径，示例：/Users/name/scripts/run.sh</p>
-                  {!isPathValid ? (
-                    <p className="mt-1 text-xs text-red-500">请填写绝对路径（例如 /Users/...）</p>
-                  ) : null}
-                </label>
-
-                <div
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={handleDropPath}
-                  className="rounded-lg border border-dashed border-gray-300 bg-gray-50 px-3 py-3 text-xs text-gray-500"
-                >
-                  拖拽脚本文件到此处（将读取绝对路径）
-                </div>
-
-                <button
-                  type="button"
-                  onClick={chooseScriptPath}
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
-                >
-                  从文件管理器选择
-                </button>
-              </div>
-            )}
+            <label className="block">
+              <span className="mb-1 block text-xs text-gray-400">参数类型</span>
+              <AppSelect
+                value={draft.paramType}
+                onChange={(value) =>
+                  setDraft((prev) => ({
+                    ...prev,
+                    paramType: value as SchemeDraft['paramType'],
+                  }))
+                }
+                options={[
+                  { value: 'string', label: '文本' },
+                  { value: 'number', label: '仅数字' },
+                ]}
+                className="w-full"
+              />
+            </label>
           </div>
 
           <div className="mt-auto flex items-center justify-between border-t border-gray-100 pt-4">

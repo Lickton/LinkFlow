@@ -1,10 +1,7 @@
 import { isTauri } from '@tauri-apps/api/core';
-import {
-  isPermissionGranted,
-  requestPermission,
-  sendNotification,
-} from '@tauri-apps/plugin-notification';
-import { useEffect, useRef, useState } from 'react';
+import { isPermissionGranted } from '@tauri-apps/plugin-notification';
+import { open as openExternal } from '@tauri-apps/plugin-shell';
+import { useEffect, useState } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import { MainContent } from './components/main/MainContent';
 import { ActionPickerModal } from './components/modals/ActionPickerModal';
@@ -16,6 +13,7 @@ import { executeTaskAction } from './utils/actionEngine';
 import type { List, Task } from './types/models';
 
 const ALL_TASKS_LIST_ID = 'list_today';
+const isMacDesktop = () => /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
 
 function App() {
   const {
@@ -58,8 +56,7 @@ function App() {
   const [isUpdatingList, setIsUpdatingList] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [taskFilter, setTaskFilter] = useState<'all' | 'today' | 'overdue' | 'upcoming'>('all');
-  const executedScriptTaskKeysRef = useRef<Set<string>>(new Set());
-  const notifiedReminderKeysRef = useRef<Set<string>>(new Set());
+  const [notificationPermissionGranted, setNotificationPermissionGranted] = useState<boolean | null>(null);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -71,6 +68,64 @@ function App() {
     });
   }, [initFromBackend]);
 
+  useEffect(() => {
+    if (!isTauri()) {
+      return;
+    }
+
+    let disposed = false;
+
+    const checkNotificationPermissionOnce = async () => {
+      try {
+        const granted = await isPermissionGranted();
+        if (disposed) {
+          return;
+        }
+        setNotificationPermissionGranted(granted);
+
+        if (granted) {
+          return;
+        }
+
+        const shouldOpenSettings = window.confirm(
+          '未开启系统通知权限，提醒将无法触发。是否前往系统设置的通知权限页面？',
+        );
+        if (!shouldOpenSettings || disposed) {
+          return;
+        }
+
+        if (isMacDesktop()) {
+          const macUrls = [
+            'x-apple.systempreferences:com.apple.Notifications-Settings.extension',
+            'x-apple.systempreferences:com.apple.preference.notifications',
+          ];
+
+          for (const url of macUrls) {
+            try {
+              await openExternal(url);
+              return;
+            } catch {
+              // Try the next known macOS settings URL scheme.
+            }
+          }
+        }
+
+        window.alert('无法自动打开通知设置，请手动前往系统设置的“通知”页面开启 LinkFlow。');
+      } catch (error) {
+        console.error('Failed to check notification permission on startup', error);
+        if (!disposed) {
+          setNotificationPermissionGranted(false);
+        }
+      }
+    };
+
+    void checkNotificationPermissionOnce();
+
+    return () => {
+      disposed = true;
+    };
+  }, []);
+
   const activeList = lists.find((list) => list.id === activeListId);
   const draftActionPreviews = (draftTask.actions ?? [])
     .map((action, index) => {
@@ -80,7 +135,7 @@ function App() {
       }
       return {
         key: `${action.schemeId}-${index}`,
-        label: `${scheme.icon} ${scheme.name}${scheme.kind === 'script' ? ' · 脚本' : ''}`,
+        label: `${scheme.icon} ${scheme.name}`,
         params: action.params,
       };
     })
@@ -262,101 +317,26 @@ function App() {
       await executeTaskAction(action, scheme);
     } catch (error) {
       console.error('Failed to execute action', error);
-      if (scheme?.kind === 'script') {
-        window.alert('脚本执行失败，请确认路径为绝对路径且文件可执行，并在 Tauri 桌面端运行。');
-        return;
-      }
       window.alert('动作执行失败，请确认已在 Tauri 桌面端运行，并检查 URL Scheme 是否已安装。');
     }
   };
 
-  useEffect(() => {
+  const ensureNotificationPermissionForReminderPanel = (): boolean => {
     if (!isTauri()) {
-      return;
+      return true;
     }
 
-    let notificationPermissionChecked = false;
-    let notificationGranted = false;
+    if (notificationPermissionGranted === false) {
+      window.alert('系统通知权限未开启，请先在系统设置中为 LinkFlow 开启通知权限。');
+      return false;
+    }
+    if (notificationPermissionGranted === null) {
+      window.alert('正在检查通知权限，请稍后再试。');
+      return false;
+    }
 
-    const ensureNotificationPermission = async (): Promise<boolean> => {
-      if (notificationPermissionChecked) {
-        return notificationGranted;
-      }
-
-      const granted = await isPermissionGranted();
-      if (granted) {
-        notificationPermissionChecked = true;
-        notificationGranted = true;
-        return true;
-      }
-
-      const permission = await requestPermission();
-      notificationPermissionChecked = true;
-      notificationGranted = permission === 'granted';
-      return notificationGranted;
-    };
-
-    const runDueTasks = async () => {
-      const now = Date.now();
-      for (const task of tasks) {
-        if (task.completed || !task.dueDate || !task.time) {
-          continue;
-        }
-
-        const dueAt = new Date(`${task.dueDate}T${task.time}:00`).getTime();
-        if (!Number.isFinite(dueAt) || dueAt > now) {
-          continue;
-        }
-
-        if (task.reminder?.type === 'relative') {
-          const reminderOffsetMinutes = Math.max(0, task.reminder.offsetMinutes);
-          const remindAt = dueAt - reminderOffsetMinutes * 60_000;
-          const reminderKey = `${task.id}|${task.dueDate}|${task.time}|${reminderOffsetMinutes}`;
-          if (remindAt <= now && !notifiedReminderKeysRef.current.has(reminderKey)) {
-            try {
-              if (await ensureNotificationPermission()) {
-                sendNotification({
-                  title: `任务提醒：${task.title}`,
-                  body: task.detail?.trim() || `计划时间 ${task.dueDate} ${task.time}`,
-                });
-                notifiedReminderKeysRef.current.add(reminderKey);
-              }
-            } catch (error) {
-              console.error('Failed to send reminder notification', error);
-            }
-          }
-        }
-
-        const taskActions = task.actions ?? [];
-        for (const action of taskActions) {
-          const scheme = schemes.find((item) => item.id === action.schemeId);
-          if (!scheme || scheme.kind !== 'script') {
-            continue;
-          }
-
-          const runKey = `${task.id}|${task.dueDate}|${task.time}|${scheme.id}`;
-          if (executedScriptTaskKeysRef.current.has(runKey)) {
-            continue;
-          }
-
-          try {
-            await executeTaskAction(action, scheme);
-            executedScriptTaskKeysRef.current.add(runKey);
-          } catch (error) {
-            console.error('Failed to execute scheduled script task', error);
-          }
-        }
-      }
-    };
-
-    const timer = window.setInterval(() => {
-      void runDueTasks();
-    }, 30_000);
-
-    void runDueTasks();
-
-    return () => window.clearInterval(timer);
-  }, [schemes, tasks]);
+    return true;
+  };
 
   useEffect(() => {
     if (!isCreateListOpen) {
@@ -448,6 +428,7 @@ function App() {
             onDraftReminderChange={(value) =>
               dispatchDraftSchedule({ type: 'DRAFT_SET_REMINDER', reminder: value })
             }
+            onBeforeOpenDraftReminder={ensureNotificationPermissionForReminderPanel}
             onDraftRepeatTypeChange={(value) => {
               if (value === 'none') {
                 updateDraftTask({ repeat: null });

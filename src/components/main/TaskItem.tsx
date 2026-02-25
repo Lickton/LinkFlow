@@ -82,7 +82,7 @@ export function TaskItem({
       {hasActionBinding ? (
         <div className="flex flex-wrap justify-end gap-1.5">
           {actionSchemes.map((scheme) => {
-            const actionLabel = `${scheme.icon} ${scheme.name}${scheme.kind === 'script' ? ' · 脚本' : ''}`;
+            const actionLabel = `${scheme.icon} ${scheme.name}`;
             return (
               <button
                 key={scheme.id}

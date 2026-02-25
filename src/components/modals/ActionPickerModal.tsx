@@ -1,8 +1,6 @@
 import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { isTauri } from '@tauri-apps/api/core';
-import { open } from '@tauri-apps/plugin-dialog';
 import type { TaskActionBinding, UrlScheme } from '../../types/models';
 
 interface ActionPickerModalProps {
@@ -16,9 +14,6 @@ interface ActionPickerModalProps {
 const getExpectedParamCount = (scheme?: UrlScheme): number => {
   if (!scheme) {
     return 0;
-  }
-  if (scheme.kind === 'script') {
-    return 1;
   }
   return (scheme.template.match(/\{param\}/g) ?? []).length;
 };
@@ -88,12 +83,6 @@ export function ActionPickerModal({
       return false;
     }
 
-    if (scheme.kind === 'script') {
-      const scriptPath = (action.params[0] ?? '').trim();
-      const isAbsolutePath = /^\/|^[A-Za-z]:\\/.test(scriptPath);
-      return !scriptPath || !isAbsolutePath;
-    }
-
     return action.params.some((value) => value.trim() === '');
   };
 
@@ -116,8 +105,7 @@ export function ActionPickerModal({
 
   const updateActionParam = (schemeId: string, index: number, value: string) => {
     const scheme = schemes.find((item) => item.id === schemeId);
-    const normalizedValue =
-      scheme?.kind !== 'script' && scheme?.paramType === 'number' ? value.replace(/\D/g, '') : value;
+    const normalizedValue = scheme?.paramType === 'number' ? value.replace(/\D/g, '') : value;
 
     setSelectedActions((prev) =>
       prev.map((action) =>
@@ -131,26 +119,6 @@ export function ActionPickerModal({
           : action,
       ),
     );
-  };
-
-  const chooseScriptPath = async (schemeId: string) => {
-    if (!isTauri()) {
-      window.alert('文件选择仅支持 Tauri 桌面端。你也可以直接输入绝对路径。');
-      return;
-    }
-
-    try {
-      const selected = await open({
-        multiple: false,
-        directory: false,
-      });
-      const filePath = Array.isArray(selected) ? selected[0] : selected;
-      if (typeof filePath === 'string' && filePath.trim()) {
-        updateActionParam(schemeId, 0, filePath.trim());
-      }
-    } catch (error) {
-      console.error('Failed to pick script path', error);
-    }
   };
 
   if (!isOpen) {
@@ -194,7 +162,6 @@ export function ActionPickerModal({
                   >
                     <span className="truncate text-sm text-gray-700">
                       {scheme.icon} {scheme.name}
-                      {scheme.kind === 'script' ? '（脚本）' : ''}
                     </span>
                     <span className="text-xs text-linkflow-accent">添加</span>
                   </button>
@@ -216,7 +183,6 @@ export function ActionPickerModal({
                   }
 
                   const isInvalid = isActionInvalid(action);
-                  const isScriptAction = scheme.kind === 'script';
                   const templateParts = scheme.template.split('{param}');
                   const expectedParamCount = getExpectedParamCount(scheme);
 
@@ -225,7 +191,6 @@ export function ActionPickerModal({
                       <div className="mb-2 flex items-center justify-between gap-2">
                         <p className="truncate text-sm font-medium text-gray-700">
                           {scheme.icon} {scheme.name}
-                          {scheme.kind === 'script' ? ' · 脚本' : ''}
                         </p>
                         <button
                           type="button"
@@ -236,23 +201,7 @@ export function ActionPickerModal({
                         </button>
                       </div>
 
-                      {isScriptAction ? (
-                        <div className="space-y-2">
-                          <input
-                            value={action.params[0] ?? ''}
-                            onChange={(event) => updateActionParam(scheme.id, 0, event.target.value)}
-                            placeholder={scheme.template || '/Users/you/scripts/run.sh'}
-                            className="w-full rounded-md border border-blue-100 bg-blue-50 px-2 py-1.5 text-sm text-linkflow-accent outline-none ring-linkflow-accent/20 focus:ring"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => void chooseScriptPath(scheme.id)}
-                            className="rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 transition hover:bg-gray-50"
-                          >
-                            选择脚本文件
-                          </button>
-                        </div>
-                      ) : expectedParamCount > 0 ? (
+                      {expectedParamCount > 0 ? (
                         <div className="flex flex-wrap items-center gap-2 text-sm">
                           {templateParts.map((part, index) => (
                             <div key={`${part}-${index}`} className="flex items-center gap-2">
@@ -275,9 +224,7 @@ export function ActionPickerModal({
                       )}
 
                       {isInvalid ? (
-                        <p className="mt-2 text-xs text-red-500">
-                          {isScriptAction ? '请填写脚本绝对路径' : '请填写完整参数'}
-                        </p>
+                        <p className="mt-2 text-xs text-red-500">请填写完整参数</p>
                       ) : null}
                     </div>
                   );

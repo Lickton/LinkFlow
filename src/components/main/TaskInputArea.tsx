@@ -29,6 +29,7 @@ interface TaskInputAreaProps {
   onDueDateChange: (value: string | null) => void;
   onTimeChange: (value: string | null) => void;
   onReminderChange: (value: TaskReminder) => void;
+  onBeforeOpenReminder?: () => Promise<boolean> | boolean;
   onRepeatTypeChange: (value: RepeatType | 'none') => void;
   onToggleRepeatWeekDay: (value: number) => void;
   onSetRepeatMonthDays: (value: number[]) => void;
@@ -133,6 +134,7 @@ export function TaskInputArea({
   onDueDateChange,
   onTimeChange,
   onReminderChange,
+  onBeforeOpenReminder,
   onRepeatTypeChange,
   onToggleRepeatWeekDay,
   onSetRepeatMonthDays,
@@ -151,7 +153,7 @@ export function TaskInputArea({
   const reminderOffsetMinutes = reminder?.type === 'relative' ? reminder.offsetMinutes : 10;
   const canUseRelativeReminder = Boolean(dueDate && time);
 
-  const commitTimeInput = () => {
+  const commitTimeInput = (closePanel = false) => {
     const normalized = ui.timeInput.trim() || '00:00';
 
     if (!isValidTime(normalized)) {
@@ -160,7 +162,14 @@ export function TaskInputArea({
     }
 
     onTimeChange(normalized);
-    dispatchUi({ type: 'UI_CLOSE_PANEL' });
+    if (closePanel) {
+      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+    }
+  };
+
+  const revertTimeInput = () => {
+    dispatchUi({ type: 'UI_SET_TIME_INPUT', value: time ?? '00:00' });
+    dispatchUi({ type: 'UI_SET_TIME_ERROR', message: null });
   };
 
   return (
@@ -234,13 +243,24 @@ export function TaskInputArea({
           icon={<Bell size={14} />}
           label="提醒"
           active={ui.activePanel === 'reminder' || Boolean(reminder)}
-          onClick={() =>
-            dispatchUi({
-              type: ui.activePanel === 'reminder' ? 'UI_CLOSE_PANEL' : 'UI_OPEN_PANEL',
-              panel: 'reminder',
-              currentTime: time,
-            })
-          }
+          onClick={() => {
+            if (ui.activePanel === 'reminder') {
+              dispatchUi({ type: 'UI_CLOSE_PANEL' });
+              return;
+            }
+
+            void (async () => {
+              const canOpen = (await onBeforeOpenReminder?.()) ?? true;
+              if (!canOpen) {
+                return;
+              }
+              dispatchUi({
+                type: 'UI_OPEN_PANEL',
+                panel: 'reminder',
+                currentTime: time,
+              });
+            })();
+          }}
         />
 
         <ToolbarButton
@@ -298,8 +318,7 @@ export function TaskInputArea({
                     key={preset}
                     type="button"
                     onClick={() => {
-                      onTimeChange(preset);
-                      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                      dispatchUi({ type: 'UI_SET_TIME_INPUT', value: preset });
                     }}
                     className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-600 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
                   >
@@ -312,7 +331,8 @@ export function TaskInputArea({
                     type="button"
                     onClick={() => {
                       onTimeChange(null);
-                      dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                      dispatchUi({ type: 'UI_SET_TIME_INPUT', value: '00:00' });
+                      dispatchUi({ type: 'UI_SET_TIME_ERROR', message: null });
                     }}
                     className="rounded-2xl border border-transparent bg-white px-3 py-2 text-xs font-medium text-gray-500 transition-all duration-150 hover:border-gray-200/70 hover:bg-gray-100"
                   >
@@ -327,25 +347,28 @@ export function TaskInputArea({
                   type="time"
                   value={ui.timeInput}
                   onChange={(event) => dispatchUi({ type: 'UI_SET_TIME_INPUT', value: event.target.value })}
-                  onBlur={commitTimeInput}
                   onKeyDown={(event) => {
                     if (event.key === 'Escape') {
                       event.preventDefault();
-                      dispatchUi({
-                        type: 'UI_SET_TIME_INPUT',
-                        value: ui.openedTimeValue ?? '',
-                      });
+                      revertTimeInput();
                       dispatchUi({ type: 'UI_CLOSE_PANEL' });
                       return;
                     }
                     if (event.key === 'Enter') {
                       event.preventDefault();
-                      commitTimeInput();
+                      commitTimeInput(true);
                     }
                   }}
                   className="h-8 w-[118px] rounded-2xl border border-gray-200/60 bg-white px-3 py-2 text-[14px] font-light tracking-[0.01em] text-gray-600 outline-none transition-all duration-150 hover:border-gray-300/70 hover:bg-gray-50 focus:border-gray-300 focus:ring-2 focus:ring-linkflow-accent/15"
                   autoFocus
                 />
+                <button
+                  type="button"
+                  onClick={() => commitTimeInput(false)}
+                  className="rounded-2xl bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700"
+                >
+                  确认
+                </button>
               </div>
 
               {ui.timeError ? <p className="text-xs text-red-500">{ui.timeError}</p> : null}

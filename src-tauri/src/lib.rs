@@ -1,18 +1,52 @@
-use chrono::{Datelike, Duration, NaiveDate};
+use chrono::{Datelike, Duration, Local, NaiveDate, NaiveTime, TimeZone, Utc};
 use rusqlite::{params, Connection};
 use serde::de::{self, Deserializer};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use tauri::{Manager, State};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, State};
+use tauri_plugin_notification::NotificationExt;
+use tokio::sync::Notify;
+use tokio::time::{sleep, Duration as TokioDuration};
 use uuid::Uuid;
 
 #[derive(Clone)]
 struct DbState {
   db_path: PathBuf,
 }
+
+#[derive(Clone)]
+struct SchedulerState {
+  wakeup: Arc<Notify>,
+}
+
+#[derive(Debug, Clone)]
+struct ReminderCandidate {
+  task_id: String,
+  task_title: String,
+  task_detail: Option<String>,
+  list_name: Option<String>,
+  due_date: String,
+  time: String,
+  remind_at_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DebugNextReminder {
+  task_id: String,
+  task_title: String,
+  remind_at: i64,
+  due_date: String,
+  time: String,
+  now: i64,
+  delay_ms: i64,
+}
+
+const REMINDER_GRACE_MS: i64 = 10 * 60 * 1000;
+const FIRED_REMINDER_RETENTION_MS: i64 = 30 * 24 * 60 * 60 * 1000;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -225,15 +259,8 @@ fn reminder_from_db(enabled: Option<i64>, offset: Option<i64>) -> Option<Reminde
 }
 
 fn normalize_scheme_kind(kind: Option<String>) -> String {
-  match kind
-    .unwrap_or_else(|| "url".to_string())
-    .trim()
-    .to_ascii_lowercase()
-    .as_str()
-  {
-    "script" => "script".to_string(),
-    _ => "url".to_string(),
-  }
+  let _ = kind;
+  "url".to_string()
 }
 
 fn open_connection(db_path: &Path) -> Result<Connection, String> {
@@ -322,14 +349,6 @@ fn default_schemes() -> Vec<UrlScheme> {
       kind: "url".to_string(),
       param_type: "string".to_string(),
     },
-    UrlScheme {
-      id: "scheme_script_local".to_string(),
-      name: "本地脚本".to_string(),
-      icon: "📜".to_string(),
-      template: "/absolute/path/to/your-script.sh".to_string(),
-      kind: "script".to_string(),
-      param_type: "string".to_string(),
-    },
   ]
 }
 
@@ -381,9 +400,20 @@ fn init_database(db_path: &Path) -> Result<(), String> {
         FOREIGN KEY(task_id) REFERENCES tasks(id) ON DELETE CASCADE,
         FOREIGN KEY(scheme_id) REFERENCES schemes(id) ON DELETE CASCADE
       );
+
+      CREATE TABLE IF NOT EXISTS fired_reminders (
+        task_id TEXT NOT NULL,
+        remind_at INTEGER NOT NULL,
+        fired_at INTEGER NOT NULL,
+        PRIMARY KEY(task_id, remind_at)
+      );
       "#,
     )
     .map_err(|err| format!("Failed to initialize schema: {err}"))?;
+
+  conn
+    .execute("UPDATE schemes SET kind = 'url' WHERE kind IS NULL OR kind != 'url'", [])
+    .map_err(|err| format!("Failed to normalize scheme kinds: {err}"))?;
 
   let list_count: i64 = conn
     .query_row("SELECT COUNT(*) FROM lists", [], |row| row.get(0))
@@ -599,6 +629,9 @@ fn persist_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(),
     .execute("DELETE FROM task_actions", [])
     .map_err(|err| format!("Failed to clear task actions: {err}"))?;
   tx
+    .execute("DELETE FROM fired_reminders", [])
+    .map_err(|err| format!("Failed to clear fired reminders: {err}"))?;
+  tx
     .execute("DELETE FROM tasks", [])
     .map_err(|err| format!("Failed to clear tasks: {err}"))?;
   tx
@@ -697,6 +730,238 @@ fn persist_snapshot(conn: &mut Connection, snapshot: &AppSnapshot) -> Result<(),
 
 fn parse_date_ymd(value: &str) -> Option<NaiveDate> {
   NaiveDate::parse_from_str(value, "%Y-%m-%d").ok()
+}
+
+fn parse_time_hm(value: &str) -> Option<NaiveTime> {
+  NaiveTime::parse_from_str(value, "%H:%M").ok()
+}
+
+fn now_epoch_ms() -> i64 {
+  Utc::now().timestamp_millis()
+}
+
+fn compute_remind_at(task: &TaskItem) -> Option<i64> {
+  let due_date = parse_date_ymd(task.due_date.as_deref()?)?;
+  let due_time = parse_time_hm(task.time.as_deref()?)?;
+  let reminder = task.reminder.as_ref()?;
+  if reminder.reminder_type != "relative" {
+    return None;
+  }
+
+  let naive_dt = due_date.and_time(due_time);
+  let due_local = match Local.from_local_datetime(&naive_dt) {
+    chrono::LocalResult::Single(dt) => dt,
+    chrono::LocalResult::Ambiguous(first, _) => first,
+    chrono::LocalResult::None => return None,
+  };
+
+  Some(due_local.timestamp_millis() - reminder.offset_minutes.max(0) * 60_000)
+}
+
+fn cleanup_old_fired_reminders(conn: &Connection, now_ms: i64) -> Result<(), String> {
+  let threshold = now_ms - FIRED_REMINDER_RETENTION_MS;
+  conn
+    .execute(
+      "DELETE FROM fired_reminders WHERE fired_at < ?1",
+      params![threshold],
+    )
+    .map_err(|err| format!("Failed to cleanup fired reminders: {err}"))?;
+  Ok(())
+}
+
+fn is_reminder_fired(conn: &Connection, task_id: &str, remind_at_ms: i64) -> Result<bool, String> {
+  let exists: i64 = conn
+    .query_row(
+      "SELECT EXISTS(SELECT 1 FROM fired_reminders WHERE task_id = ?1 AND remind_at = ?2)",
+      params![task_id, remind_at_ms],
+      |row| row.get(0),
+    )
+    .map_err(|err| format!("Failed to check fired reminder: {err}"))?;
+  Ok(exists != 0)
+}
+
+fn query_next_reminder(db_path: &Path, now_ms: i64) -> Result<Option<ReminderCandidate>, String> {
+  let conn = open_connection(db_path)?;
+  cleanup_old_fired_reminders(&conn, now_ms)?;
+
+  let mut stmt = conn
+    .prepare(
+      "SELECT t.id, t.title, t.detail, t.date, t.time, t.reminder, t.reminder_offset_minutes, l.name
+       FROM tasks t
+       LEFT JOIN lists l ON l.id = t.list_id
+       WHERE t.completed = 0
+         AND t.date IS NOT NULL
+         AND t.time IS NOT NULL
+         AND t.reminder = 1
+       ORDER BY t.date ASC, t.time ASC, t.rowid ASC",
+    )
+    .map_err(|err| format!("Failed to query reminder candidates: {err}"))?;
+
+  let rows = stmt
+    .query_map([], |row| {
+      Ok((
+        row.get::<_, String>(0)?,
+        row.get::<_, String>(1)?,
+        row.get::<_, Option<String>>(2)?,
+        row.get::<_, Option<String>>(3)?,
+        row.get::<_, Option<String>>(4)?,
+        row.get::<_, Option<i64>>(5)?,
+        row.get::<_, Option<i64>>(6)?,
+        row.get::<_, Option<String>>(7)?,
+      ))
+    })
+    .map_err(|err| format!("Failed to map reminder candidates: {err}"))?;
+
+  let mut next: Option<ReminderCandidate> = None;
+  for row in rows {
+    let (task_id, title, detail, due_date, time, reminder_enabled, reminder_offset, list_name) =
+      row.map_err(|err| format!("Failed to read reminder candidate row: {err}"))?;
+    if reminder_enabled.unwrap_or(0) == 0 {
+      continue;
+    }
+
+    let task = TaskItem {
+      id: task_id.clone(),
+      list_id: None,
+      title: title.clone(),
+      detail: detail.clone(),
+      completed: false,
+      due_date: due_date.clone(),
+      time: time.clone(),
+      reminder: reminder_from_db(reminder_enabled, reminder_offset),
+      repeat_rule: None,
+      actions: None,
+    };
+    let Some(remind_at_ms) = compute_remind_at(&task) else {
+      continue;
+    };
+    if remind_at_ms < now_ms - REMINDER_GRACE_MS {
+      continue;
+    }
+    if is_reminder_fired(&conn, &task_id, remind_at_ms)? {
+      continue;
+    }
+
+    let candidate = ReminderCandidate {
+      task_id,
+      task_title: title,
+      task_detail: detail,
+      list_name,
+      due_date: due_date.unwrap_or_default(),
+      time: time.unwrap_or_default(),
+      remind_at_ms,
+    };
+
+    let should_replace = next
+      .as_ref()
+      .map(|existing| candidate.remind_at_ms < existing.remind_at_ms)
+      .unwrap_or(true);
+    if should_replace {
+      next = Some(candidate);
+    }
+  }
+
+  Ok(next)
+}
+
+fn mark_reminder_fired(
+  conn: &Connection,
+  task_id: &str,
+  remind_at_ms: i64,
+  fired_at_ms: i64,
+) -> Result<bool, String> {
+  let affected = conn
+    .execute(
+      "INSERT OR IGNORE INTO fired_reminders (task_id, remind_at, fired_at) VALUES (?1, ?2, ?3)",
+      params![task_id, remind_at_ms, fired_at_ms],
+    )
+    .map_err(|err| format!("Failed to record fired reminder: {err}"))?;
+  Ok(affected == 1)
+}
+
+fn send_task_reminder_notification(app: &AppHandle, candidate: &ReminderCandidate) -> Result<(), String> {
+  let body = candidate
+    .task_detail
+    .as_deref()
+    .filter(|text| !text.trim().is_empty())
+    .map(|text| text.to_string())
+    .unwrap_or_else(|| {
+      let list_prefix = candidate
+        .list_name
+        .as_ref()
+        .map(|name| format!("{} · ", name))
+        .unwrap_or_default();
+      format!("{list_prefix}{} {}", candidate.due_date, candidate.time)
+    });
+
+  app
+    .notification()
+    .builder()
+    .title(format!("任务提醒：{}", candidate.task_title))
+    .body(body)
+    .show()
+    .map_err(|err| format!("Failed to show notification: {err}"))
+}
+
+fn scheduler_wakeup(scheduler: &SchedulerState) {
+  scheduler.wakeup.notify_one();
+}
+
+async fn scheduler_loop(app: AppHandle, db_path: PathBuf, wakeup: Arc<Notify>) {
+  loop {
+    let now_ms = now_epoch_ms();
+    let next = match query_next_reminder(&db_path, now_ms) {
+      Ok(next) => next,
+      Err(error) => {
+        eprintln!("scheduler query_next_reminder error: {error}");
+        tokio::select! {
+          _ = wakeup.notified() => {},
+          _ = sleep(TokioDuration::from_secs(5)) => {},
+        }
+        continue;
+      }
+    };
+
+    let Some(candidate) = next else {
+      wakeup.notified().await;
+      continue;
+    };
+
+    let now_ms = now_epoch_ms();
+    let delay_ms = candidate.remind_at_ms.saturating_sub(now_ms);
+
+    if delay_ms > 0 {
+      tokio::select! {
+        _ = wakeup.notified() => {
+          continue;
+        }
+        _ = sleep(TokioDuration::from_millis(delay_ms as u64)) => {}
+      }
+    }
+
+    let fired_at_ms = now_epoch_ms();
+    let conn = match open_connection(&db_path) {
+      Ok(conn) => conn,
+      Err(error) => {
+        eprintln!("scheduler open db error: {error}");
+        continue;
+      }
+    };
+
+    if let Err(error) = cleanup_old_fired_reminders(&conn, fired_at_ms) {
+      eprintln!("scheduler cleanup fired reminders error: {error}");
+    }
+
+    match mark_reminder_fired(&conn, &candidate.task_id, candidate.remind_at_ms, fired_at_ms) {
+      Ok(true) => {
+        if let Err(error) = send_task_reminder_notification(&app, &candidate) {
+          eprintln!("scheduler send notification error: {error}");
+        }
+      }
+      Ok(false) => {}
+      Err(error) => eprintln!("scheduler mark reminder fired error: {error}"),
+    }
+  }
 }
 
 fn compute_next_repeat_date(task: &TaskItem) -> Option<String> {
@@ -812,7 +1077,11 @@ fn export_backup(db: State<'_, DbState>, path: String) -> Result<String, String>
 }
 
 #[tauri::command]
-fn import_backup(db: State<'_, DbState>, path: String) -> Result<AppSnapshot, String> {
+fn import_backup(
+  db: State<'_, DbState>,
+  scheduler: State<'_, SchedulerState>,
+  path: String,
+) -> Result<AppSnapshot, String> {
   let input_path = PathBuf::from(path.trim());
   if input_path.as_os_str().is_empty() {
     return Err("Backup path is required".to_string());
@@ -832,6 +1101,7 @@ fn import_backup(db: State<'_, DbState>, path: String) -> Result<AppSnapshot, St
 
   let mut conn = open_connection(&db.db_path)?;
   persist_snapshot(&mut conn, &payload.snapshot)?;
+  scheduler_wakeup(&scheduler);
 
   let conn = open_connection(&db.db_path)?;
   Ok(AppSnapshot {
@@ -839,6 +1109,21 @@ fn import_backup(db: State<'_, DbState>, path: String) -> Result<AppSnapshot, St
     tasks: load_tasks(&conn)?,
     schemes: load_schemes(&conn)?,
   })
+}
+
+#[tauri::command]
+fn debug_next_reminder(db: State<'_, DbState>) -> Result<Option<DebugNextReminder>, String> {
+  let now = now_epoch_ms();
+  let next = query_next_reminder(&db.db_path, now)?;
+  Ok(next.map(|item| DebugNextReminder {
+    task_id: item.task_id,
+    task_title: item.task_title,
+    remind_at: item.remind_at_ms,
+    due_date: item.due_date,
+    time: item.time,
+    now,
+    delay_ms: item.remind_at_ms.saturating_sub(now),
+  }))
 }
 
 #[tauri::command]
@@ -992,7 +1277,11 @@ fn delete_scheme(db: State<'_, DbState>, scheme_id: String) -> Result<(), String
 }
 
 #[tauri::command]
-fn create_task(db: State<'_, DbState>, input: NewTaskInput) -> Result<TaskItem, String> {
+fn create_task(
+  db: State<'_, DbState>,
+  scheduler: State<'_, SchedulerState>,
+  input: NewTaskInput,
+) -> Result<TaskItem, String> {
   validate_repeat_rule(&input.repeat_rule)?;
   let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&input.reminder)?;
 
@@ -1053,13 +1342,18 @@ fn create_task(db: State<'_, DbState>, input: NewTaskInput) -> Result<TaskItem, 
   tx
     .commit()
     .map_err(|err| format!("Failed to commit task creation: {err}"))?;
+  scheduler_wakeup(&scheduler);
 
   let conn = open_connection(&db.db_path)?;
   fetch_task_by_id(&conn, &task_id)
 }
 
 #[tauri::command]
-fn save_task(db: State<'_, DbState>, task: SaveTaskInput) -> Result<TaskItem, String> {
+fn save_task(
+  db: State<'_, DbState>,
+  scheduler: State<'_, SchedulerState>,
+  task: SaveTaskInput,
+) -> Result<TaskItem, String> {
   validate_repeat_rule(&task.repeat_rule)?;
   let (reminder_enabled, reminder_offset_minutes) = reminder_to_db(&task.reminder)?;
 
@@ -1134,13 +1428,18 @@ fn save_task(db: State<'_, DbState>, task: SaveTaskInput) -> Result<TaskItem, St
   tx
     .commit()
     .map_err(|err| format!("Failed to commit task update: {err}"))?;
+  scheduler_wakeup(&scheduler);
 
   let conn = open_connection(&db.db_path)?;
   fetch_task_by_id(&conn, &task.id)
 }
 
 #[tauri::command]
-fn toggle_task_completed(db: State<'_, DbState>, task_id: String) -> Result<TaskItem, String> {
+fn toggle_task_completed(
+  db: State<'_, DbState>,
+  scheduler: State<'_, SchedulerState>,
+  task_id: String,
+) -> Result<TaskItem, String> {
   let mut conn = open_connection(&db.db_path)?;
   let task = fetch_task_by_id(&conn, &task_id)?;
   let next = if task.completed { 0 } else { 1 };
@@ -1205,13 +1504,18 @@ fn toggle_task_completed(db: State<'_, DbState>, task_id: String) -> Result<Task
   tx
     .commit()
     .map_err(|err| format!("Failed to commit task toggle: {err}"))?;
+  scheduler_wakeup(&scheduler);
 
   let conn = open_connection(&db.db_path)?;
   fetch_task_by_id(&conn, &task_id)
 }
 
 #[tauri::command]
-fn delete_task(db: State<'_, DbState>, task_id: String) -> Result<(), String> {
+fn delete_task(
+  db: State<'_, DbState>,
+  scheduler: State<'_, SchedulerState>,
+  task_id: String,
+) -> Result<(), String> {
   let conn = open_connection(&db.db_path)?;
   let affected = conn
     .execute("DELETE FROM tasks WHERE id = ?1", params![task_id])
@@ -1221,6 +1525,7 @@ fn delete_task(db: State<'_, DbState>, task_id: String) -> Result<(), String> {
     return Err("Task not found".to_string());
   }
 
+  scheduler_wakeup(&scheduler);
   Ok(())
 }
 
@@ -1242,52 +1547,6 @@ fn delete_list(db: State<'_, DbState>, list_id: String) -> Result<(), String> {
   Ok(())
 }
 
-#[tauri::command]
-fn run_script(path: String) -> Result<(), String> {
-  let trimmed = path.trim();
-  if trimmed.is_empty() {
-    return Err("Script path is empty".to_string());
-  }
-
-  let script_path = Path::new(trimmed);
-  if !script_path.is_absolute() {
-    return Err("Script path must be absolute".to_string());
-  }
-  if !script_path.exists() {
-    return Err("Script file does not exist".to_string());
-  }
-
-  let extension = script_path
-    .extension()
-    .and_then(|ext| ext.to_str())
-    .map(|ext| ext.to_ascii_lowercase());
-
-  let mut command = match extension.as_deref() {
-    Some("sh") => {
-      let mut cmd = Command::new("zsh");
-      cmd.arg(trimmed);
-      cmd
-    }
-    Some("py") => {
-      let mut cmd = Command::new("python3");
-      cmd.arg(trimmed);
-      cmd
-    }
-    Some("js") | Some("mjs") | Some("cjs") => {
-      let mut cmd = Command::new("node");
-      cmd.arg(trimmed);
-      cmd
-    }
-    _ => Command::new(trimmed),
-  };
-
-  command
-    .spawn()
-    .map_err(|error| format!("Failed to execute script: {error}"))?;
-
-  Ok(())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   tauri::Builder::default()
@@ -1303,7 +1562,16 @@ pub fn run() {
       let db_path = app_data_dir.join("linkflow.db");
       init_database(&db_path)?;
 
-      app.manage(DbState { db_path });
+      let wakeup = Arc::new(Notify::new());
+      app.manage(DbState {
+        db_path: db_path.clone(),
+      });
+      app.manage(SchedulerState {
+        wakeup: wakeup.clone(),
+      });
+
+      let app_handle = app.handle().clone();
+      tauri::async_runtime::spawn(scheduler_loop(app_handle, db_path, wakeup));
       Ok(())
     })
     .plugin(tauri_plugin_shell::init())
@@ -1313,6 +1581,7 @@ pub fn run() {
       get_app_snapshot,
       export_backup,
       import_backup,
+      debug_next_reminder,
       create_list,
       update_list,
       create_scheme,
@@ -1322,8 +1591,7 @@ pub fn run() {
       save_task,
       toggle_task_completed,
       delete_task,
-      delete_list,
-      run_script
+      delete_list
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");

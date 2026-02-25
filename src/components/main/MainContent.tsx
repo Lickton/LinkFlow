@@ -35,6 +35,7 @@ interface MainContentProps {
   onDraftDueDateChange: (value: string | null) => void;
   onDraftTimeChange: (value: string | null) => void;
   onDraftReminderChange: (value: TaskReminder) => void;
+  onBeforeOpenDraftReminder?: () => Promise<boolean> | boolean;
   onDraftRepeatTypeChange: (value: RepeatType | 'none') => void;
   onDraftToggleRepeatWeekDay: (value: number) => void;
   onDraftSetRepeatMonthDays: (value: number[]) => void;
@@ -74,6 +75,7 @@ export function MainContent({
   onDraftDueDateChange,
   onDraftTimeChange,
   onDraftReminderChange,
+  onBeforeOpenDraftReminder,
   onDraftRepeatTypeChange,
   onDraftToggleRepeatWeekDay,
   onDraftSetRepeatMonthDays,
@@ -112,6 +114,7 @@ export function MainContent({
           onDueDateChange={onDraftDueDateChange}
           onTimeChange={onDraftTimeChange}
           onReminderChange={onDraftReminderChange}
+          onBeforeOpenReminder={onBeforeOpenDraftReminder}
           onRepeatTypeChange={onDraftRepeatTypeChange}
           onToggleRepeatWeekDay={onDraftToggleRepeatWeekDay}
           onSetRepeatMonthDays={onDraftSetRepeatMonthDays}

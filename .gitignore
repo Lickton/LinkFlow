@@ -3,7 +3,11 @@ node_modules
 /.idea
 .DS_Store
 *.log
+*.tsbuildinfo
 
 # Tauri
 /src-tauri/target
 /src-tauri/gen
+
+# Vite cache
+.vite

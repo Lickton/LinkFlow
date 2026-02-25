@@ -3,7 +3,7 @@ export interface UrlScheme {
   name: string;
   icon: string;
   template: string;
-  kind?: 'url' | 'script';
+  kind?: 'url';
   paramType: 'string' | 'number';
 }
 

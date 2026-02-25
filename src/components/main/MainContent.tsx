@@ -48,6 +48,9 @@ interface MainContentProps {
   onDeleteTask: (taskId: string) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
   onEditTask: (task: Task) => void;
+  showTaskInputArea?: boolean;
+  contentBottomInset?: number;
+  fillViewport?: boolean;
 }
 
 export function MainContent({
@@ -88,14 +91,23 @@ export function MainContent({
   onDeleteTask,
   onExecuteAction,
   onEditTask,
+  showTaskInputArea = true,
+  contentBottomInset = 0,
+  fillViewport = false,
 }: MainContentProps) {
   const subtitle = activeView === 'completed' ? '全部已完成任务' : '';
 
   return (
-    <section className="flex h-full min-w-0 flex-1 flex-col bg-slate-50 p-6">
+    <section
+      className="flex h-full min-w-0 flex-1 flex-col bg-slate-50 p-3 sm:p-4 md:p-6"
+      style={{
+        paddingBottom: contentBottomInset > 0 ? `${contentBottomInset}px` : undefined,
+        minHeight: fillViewport ? `calc(100dvh - ${contentBottomInset}px)` : undefined,
+      }}
+    >
       <Header title={title} subtitle={subtitle} />
 
-      {activeView === 'completed' ? null : (
+      {activeView === 'completed' || !showTaskInputArea ? null : (
         <TaskInputArea
           value={draftTitle}
           detail={draftDetail}
@@ -130,18 +142,18 @@ export function MainContent({
             value={searchQuery}
             onChange={(event) => onSearchChange(event.target.value)}
             placeholder="搜索任务标题或详情"
-            className="h-10 min-w-48 flex-1 rounded-xl border border-slate-300/80 bg-slate-50 px-3 text-sm font-medium text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-linkflow-accent/15"
+            className="h-10 min-w-0 flex-1 rounded-xl border border-slate-300/80 bg-slate-50 px-3 text-sm font-medium text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-linkflow-accent/15 sm:min-w-48"
           />
           <AppSelect
-          value={taskFilter}
-          onChange={(value) => onTaskFilterChange(value as 'all' | 'today' | 'overdue' | 'upcoming')}
-          options={[
-            { value: 'all', label: '全部时间' },
-            { value: 'today', label: '今天' },
-            { value: 'overdue', label: '逾期' },
-            { value: 'upcoming', label: '未来' },
-          ]}
-            className="w-36"
+            value={taskFilter}
+            onChange={(value) => onTaskFilterChange(value as 'all' | 'today' | 'overdue' | 'upcoming')}
+            options={[
+              { value: 'all', label: '全部时间' },
+              { value: 'today', label: '今天' },
+              { value: 'overdue', label: '逾期' },
+              { value: 'upcoming', label: '未来' },
+            ]}
+            className="w-full sm:w-36"
           />
         </div>
       </div>

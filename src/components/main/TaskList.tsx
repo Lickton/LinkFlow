@@ -1,4 +1,5 @@
 import { ClipboardList, Sparkles } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import type { List, Task, UrlScheme } from '../../types/models';
 import { TaskItem } from './TaskItem';
 
@@ -25,6 +26,27 @@ export function TaskList({
   onExecuteAction,
   onEditTask,
 }: TaskListProps) {
+  const [animateEmptyHint, setAnimateEmptyHint] = useState(false);
+  const emptySceneRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (tasks.length > 0) {
+      emptySceneRef.current = null;
+      setAnimateEmptyHint(false);
+      return;
+    }
+
+    const sceneKey = showCreateHint ? 'create-empty' : 'completed-empty';
+    if (emptySceneRef.current === sceneKey) {
+      return;
+    }
+
+    emptySceneRef.current = sceneKey;
+    setAnimateEmptyHint(true);
+    const timer = window.setTimeout(() => setAnimateEmptyHint(false), 1200);
+    return () => window.clearTimeout(timer);
+  }, [tasks.length, showCreateHint]);
+
   if (tasks.length === 0) {
     return (
       <div className="h-full rounded-2xl bg-slate-100/40 p-2">
@@ -32,10 +54,18 @@ export function TaskList({
           <div className="mx-auto flex max-w-xl flex-col items-center text-center">
             <div className="relative mb-3">
               <span className="absolute -right-2 -top-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-linkflow-accent">
-                <Sparkles size={12} className="animate-pulse" />
+                <Sparkles
+                  size={12}
+                  className={animateEmptyHint ? 'animate-pulse' : ''}
+                  style={animateEmptyHint ? { animationIterationCount: 1 } : undefined}
+                />
               </span>
               <span className="inline-flex h-16 w-16 items-center justify-center rounded-2xl bg-slate-100 text-slate-500 shadow-inner">
-                <ClipboardList size={30} className="animate-bounce" />
+                <ClipboardList
+                  size={30}
+                  className={animateEmptyHint ? 'animate-bounce' : ''}
+                  style={animateEmptyHint ? { animationIterationCount: 1 } : undefined}
+                />
               </span>
             </div>
 

@@ -143,10 +143,12 @@ export function TaskInputArea({
   onOpenActionPicker,
 }: TaskInputAreaProps) {
   const dateInputRef = useRef<HTMLInputElement>(null);
+  const timePickerInputRef = useRef<HTMLInputElement>(null);
   const [ui, dispatchUi] = useReducer(uiReducer, {
     ...initialUiState,
     timeInput: time ?? '00:00',
   });
+  const shouldUseNativeTimePicker = /Android/i.test(window.navigator.userAgent);
 
   const monthDaysText = useMemo(() => repeatDaysOfMonth.join(','), [repeatDaysOfMonth]);
   const canSubmit = value.trim().length > 0;
@@ -231,6 +233,24 @@ export function TaskInputArea({
           label="时间"
           active={ui.activePanel === 'time' || Boolean(time)}
           onClick={() => {
+            if (shouldUseNativeTimePicker) {
+              const input = timePickerInputRef.current;
+              if (!input) {
+                return;
+              }
+              let opened = false;
+              try {
+                input.showPicker?.();
+                opened = typeof input.showPicker === 'function';
+              } catch {
+                // Fallback to the in-panel editor when the WebView blocks showPicker.
+              }
+              input.focus();
+              if (opened) {
+                return;
+              }
+            }
+
             if (ui.activePanel === 'time') {
               dispatchUi({ type: 'UI_CLOSE_PANEL' });
               return;
@@ -309,7 +329,7 @@ export function TaskInputArea({
             </label>
           ) : null}
 
-          {ui.activePanel === 'time' ? (
+          {ui.activePanel === 'time' && !shouldUseNativeTimePicker ? (
             <div className="flex flex-col gap-2">
               <div className="flex flex-wrap items-center gap-2">
                 <span className="text-xs text-gray-400">快捷</span>
@@ -523,6 +543,19 @@ export function TaskInputArea({
         type="date"
         value={dueDate ?? ''}
         onChange={(event) => onDueDateChange(event.target.value || null)}
+        className="sr-only"
+      />
+      <input
+        ref={timePickerInputRef}
+        type="time"
+        value={time ?? ''}
+        onChange={(event) => {
+          const next = event.target.value || null;
+          onTimeChange(next);
+          if (next) {
+            dispatchUi({ type: 'UI_SET_TIME_INPUT', value: next });
+          }
+        }}
         className="sr-only"
       />
 

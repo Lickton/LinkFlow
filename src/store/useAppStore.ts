@@ -72,6 +72,7 @@ const initialDraftTask: DraftTask = {
 };
 
 const pad = (value: number) => value.toString().padStart(2, '0');
+const taskUpdateRequestSeq = new Map<string, number>();
 
 export const formatDate = (date: Date): string => {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
@@ -281,6 +282,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) {
       return;
     }
+    const requestSeq = (taskUpdateRequestSeq.get(taskId) ?? 0) + 1;
+    taskUpdateRequestSeq.set(taskId, requestSeq);
 
     const merged: Task = {
       ...existing,
@@ -298,6 +301,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       ...merged,
       ...normalizedSchedule,
     });
+    if (taskUpdateRequestSeq.get(taskId) !== requestSeq) {
+      return;
+    }
     set((state) => ({
       tasks: state.tasks.map((task) => (task.id === saved.id ? saved : task)),
     }));

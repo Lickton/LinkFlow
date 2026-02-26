@@ -151,6 +151,7 @@ export function TaskList({
             key={task.id}
             task={task}
             isExpanded={expandedTaskId === task.id}
+            lists={lists}
             actionSchemes={actionSchemes}
             list={list}
             showListInfo={showListInfo}

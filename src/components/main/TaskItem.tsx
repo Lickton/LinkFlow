@@ -1,4 +1,4 @@
-import { Bell, Calendar, FileText, Link2, Repeat2, Trash2 } from 'lucide-react';
+import { Bell, Calendar, Clock3, FileText, Link2, Repeat2, Trash2 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { AppSelect } from '../common/AppSelect';
 import type { List, RepeatType, Task, UrlScheme } from '../../types/models';
@@ -8,6 +8,7 @@ import { TaskControlPopover, TaskRoundCheckbox } from './TaskCardPrimitives';
 interface TaskItemProps {
   task: Task;
   isExpanded: boolean;
+  lists: List[];
   actionSchemes: UrlScheme[];
   list?: List;
   showListInfo?: boolean;
@@ -30,6 +31,7 @@ type EditDraft = {
   repeatDaysOfWeek: number[];
   repeatDaysOfMonth: number[];
 };
+type RepeatDraftConfig = Pick<EditDraft, 'repeatType' | 'repeatDaysOfWeek' | 'repeatDaysOfMonth'>;
 
 const WEEK_LABELS = ['一', '二', '三', '四', '五', '六', '日'];
 const QUICK_MONTH_DAYS = [1, 5, 10, 15, 20, 25, 31];
@@ -63,6 +65,79 @@ function getRepeatSummaryLabel(repeatType: RepeatType | 'none', weekDays: number
     return weekDays.length ? weekDays.map((day) => `周${WEEK_LABELS[day]}`).join('/') : '每周';
   }
   return `每月${monthDays.join('/') || '-'}号`;
+}
+
+function sanitizeNumericCommaInput(str: string): string {
+  return str
+    .replace(/[^0-9,]+/g, '')
+    .replace(/,+/g, ',')
+    .replace(/^,+|,+$/g, '');
+}
+
+function sanitizeNumericCommaInputForEditing(str: string): string {
+  return str
+    .replace(/[^0-9,]+/g, '')
+    .replace(/,+/g, ',')
+    .replace(/^,+/g, '');
+}
+
+function parseCommaInts(str: string): number[] {
+  const nums = str
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((n) => Number.isInteger(n));
+  return Array.from(new Set(nums)).sort((a, b) => a - b);
+}
+
+function isWeeklyValueAllowed(n: number): boolean {
+  return n >= 0 && n <= 7;
+}
+
+function validateMonthlyTokens(rawStr: string): { ok: boolean; values: number[] } {
+  const sanitized = sanitizeNumericCommaInput(rawStr);
+  const tokens = sanitized
+    .split(',')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .map((part) => Number.parseInt(part, 10))
+    .filter((n) => Number.isInteger(n));
+
+  const values = Array.from(new Set(tokens.filter((n) => n >= 1 && n <= 31))).sort((a, b) => a - b);
+  const hasTokens = tokens.length > 0;
+  const allInRange = hasTokens && tokens.every((n) => n >= 1 && n <= 31);
+  return { ok: hasTokens && allInRange, values };
+}
+
+function getSanitizedCaretPosition(input: string, caret: number, finalSanitize: boolean): number {
+  const prefix = input.slice(0, caret);
+  const nextPrefix = finalSanitize ? sanitizeNumericCommaInput(prefix) : sanitizeNumericCommaInputForEditing(prefix);
+  return nextPrefix.length;
+}
+
+function isAllowedNumericCommaKey(event: React.KeyboardEvent<HTMLInputElement>): boolean {
+  if (
+    event.metaKey ||
+    event.ctrlKey ||
+    event.altKey ||
+    [
+      'Backspace',
+      'Delete',
+      'ArrowLeft',
+      'ArrowRight',
+      'ArrowUp',
+      'ArrowDown',
+      'Home',
+      'End',
+      'Tab',
+      'Enter',
+      'Escape',
+    ].includes(event.key)
+  ) {
+    return true;
+  }
+  return /^\d$/.test(event.key) || event.key === ',';
 }
 
 function shiftDate(value: string, deltaDays: number): string | null {
@@ -159,6 +234,8 @@ function isAllowedEditorControlKey(event: React.KeyboardEvent<HTMLInputElement>)
     'Tab',
     'Enter',
     'Escape',
+    'Backspace',
+    'Delete',
     'ArrowLeft',
     'ArrowRight',
     'ArrowUp',
@@ -168,12 +245,27 @@ function isAllowedEditorControlKey(event: React.KeyboardEvent<HTMLInputElement>)
   ].includes(event.key);
 }
 
+function getStepDelta(event: React.KeyboardEvent<HTMLInputElement>): -1 | 1 | null {
+  if (event.code === 'Minus' || event.code === 'NumpadSubtract') {
+    return -1;
+  }
+  if (event.code === 'Equal' || event.code === 'NumpadAdd') {
+    return 1;
+  }
+  if (event.key === '-') {
+    return -1;
+  }
+  if (event.key === '=' || event.key === '+') {
+    return 1;
+  }
+  return null;
+}
+
 export function TaskItem({
   task,
   isExpanded,
+  lists,
   actionSchemes,
-  list,
-  showListInfo,
   onToggleCompleted,
   onDeleteTask,
   onUpdateTask,
@@ -182,12 +274,34 @@ export function TaskItem({
   onToggleDetail,
 }: TaskItemProps) {
   const [draft, setDraft] = useState<EditDraft>(() => draftFromTask(task));
+  const draftRef = useRef<EditDraft>(draftFromTask(task));
   const [activePanel, setActivePanel] = useState<'repeat' | null>(null);
   const [isDetailEditing, setIsDetailEditing] = useState(false);
+  const [selectedListId, setSelectedListId] = useState<string>(task.listId ?? '__none__');
+  const [weeklyRepeatInput, setWeeklyRepeatInput] = useState('');
+  const [monthlyRepeatInput, setMonthlyRepeatInput] = useState('');
+  const [monthlyRepeatInputError, setMonthlyRepeatInputError] = useState<string | null>(null);
   const [shouldRenderExpanded, setShouldRenderExpanded] = useState(isExpanded);
   const [expandedVisible, setExpandedVisible] = useState(isExpanded);
   const wasExpandedRef = useRef(isExpanded);
+  const lastEnabledRepeatRef = useRef<RepeatDraftConfig>(
+    task.repeat
+      ? {
+          repeatType: task.repeat.type,
+          repeatDaysOfWeek: task.repeat.dayOfWeek ?? [],
+          repeatDaysOfMonth: task.repeat.dayOfMonth ?? [],
+        }
+      : {
+          repeatType: 'daily',
+          repeatDaysOfWeek: [],
+          repeatDaysOfMonth: [],
+        },
+  );
   const detailTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const weeklyInputRef = useRef<HTMLInputElement>(null);
+  const monthlyInputRef = useRef<HTMLInputElement>(null);
+  const weeklyComposingRef = useRef(false);
+  const monthlyComposingRef = useRef(false);
   const hasDetail = Boolean(task.detail?.trim());
   const hasDraftDetail = Boolean(draft.detail.trim());
   const taskActions = task.actions ?? [];
@@ -197,15 +311,58 @@ export function TaskItem({
   ).length;
 
   useEffect(() => {
-    if (isExpanded) {
-      setDraft(draftFromTask(task));
+    draftRef.current = draft;
+    if (draft.repeatType !== 'none') {
+      lastEnabledRepeatRef.current = {
+        repeatType: draft.repeatType,
+        repeatDaysOfWeek: draft.repeatDaysOfWeek,
+        repeatDaysOfMonth: draft.repeatDaysOfMonth,
+      };
     }
-  }, [isExpanded, task]);
+  }, [draft]);
+
+  useEffect(() => {
+    if (!weeklyComposingRef.current) {
+      setWeeklyRepeatInput([...new Set(draft.repeatDaysOfWeek.filter(isWeeklyValueAllowed))].sort((a, b) => a - b).join(','));
+    }
+  }, [draft.repeatDaysOfWeek]);
+
+  useEffect(() => {
+    if (!monthlyComposingRef.current) {
+      setMonthlyRepeatInput([...new Set(draft.repeatDaysOfMonth.filter((n) => n >= 1 && n <= 31))].sort((a, b) => a - b).join(','));
+      setMonthlyRepeatInputError(null);
+    }
+  }, [draft.repeatDaysOfMonth]);
+
+  useEffect(() => {
+    if (isExpanded) {
+      const nextDraft = draftFromTask(task);
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
+      const nextListValue = task.listId ?? '__none__';
+      setSelectedListId(nextListValue);
+      setWeeklyRepeatInput(
+        [...new Set(nextDraft.repeatDaysOfWeek.filter(isWeeklyValueAllowed))].sort((a, b) => a - b).join(','),
+      );
+      setMonthlyRepeatInput(
+        [...new Set(nextDraft.repeatDaysOfMonth.filter((n) => n >= 1 && n <= 31))].sort((a, b) => a - b).join(','),
+      );
+      setMonthlyRepeatInputError(null);
+      if (nextDraft.repeatType !== 'none') {
+        lastEnabledRepeatRef.current = {
+          repeatType: nextDraft.repeatType,
+          repeatDaysOfWeek: nextDraft.repeatDaysOfWeek,
+          repeatDaysOfMonth: nextDraft.repeatDaysOfMonth,
+        };
+      }
+    }
+  }, [isExpanded, task.listId]);
 
   useEffect(() => {
     if (!isExpanded) {
       setActivePanel(null);
       setIsDetailEditing(false);
+      setMonthlyRepeatInputError(null);
     }
   }, [isExpanded]);
 
@@ -234,18 +391,19 @@ export function TaskItem({
   }, [isDetailEditing]);
 
   const flushDraftToTask = () => {
-    const nextTitle = draft.title.trim() || task.title;
-    const nextDetail = draft.detail.trim() || undefined;
-    const nextDueDate = draft.dueDate || null;
-    const nextTime = draft.time || null;
-    const nextReminder = draft.reminderEnabled ? toRelativeReminder(draft.reminderMinutes) : null;
+    const currentDraft = draftRef.current;
+    const nextTitle = currentDraft.title.trim() || task.title;
+    const nextDetail = currentDraft.detail.trim() || undefined;
+    const nextDueDate = currentDraft.dueDate || null;
+    const nextTime = currentDraft.time || null;
+    const nextReminder = currentDraft.reminderEnabled ? toRelativeReminder(currentDraft.reminderMinutes) : null;
     const nextRepeat =
-      draft.repeatType === 'none'
+      currentDraft.repeatType === 'none'
         ? null
         : {
-            type: draft.repeatType,
-            ...(draft.repeatType === 'weekly' ? { dayOfWeek: draft.repeatDaysOfWeek } : {}),
-            ...(draft.repeatType === 'monthly' ? { dayOfMonth: draft.repeatDaysOfMonth } : {}),
+            type: currentDraft.repeatType,
+            ...(currentDraft.repeatType === 'weekly' ? { dayOfWeek: currentDraft.repeatDaysOfWeek } : {}),
+            ...(currentDraft.repeatType === 'monthly' ? { dayOfMonth: currentDraft.repeatDaysOfMonth } : {}),
           };
 
     commitPatch({
@@ -285,12 +443,12 @@ export function TaskItem({
 
   const withStepKeys =
     (kind: 'date' | 'time' | 'reminder') => (event: React.KeyboardEvent<HTMLInputElement>) => {
-      if (event.key !== '-' && event.key !== '=' && event.key !== '+') {
+      const delta = getStepDelta(event);
+      if (delta == null) {
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      const delta = event.key === '-' ? -1 : 1;
 
       if (kind === 'date') {
         const next = shiftDateSegment(draft.dueDate, getCaretSegmentForDate(event.currentTarget), delta);
@@ -309,10 +467,15 @@ export function TaskItem({
         return;
       }
 
-      const currentValue = Number(event.currentTarget.value);
-      const baseMinutes = Number.isFinite(currentValue) ? currentValue : draft.reminderMinutes;
-      const nextMinutes = Math.max(0, baseMinutes + delta);
-      setDraft((prev) => ({ ...prev, reminderMinutes: nextMinutes, reminderEnabled: true }));
+      const currentDraft = draftRef.current;
+      const nextMinutes = Math.max(0, currentDraft.reminderMinutes + delta);
+      const nextDraft = {
+        ...currentDraft,
+        reminderMinutes: nextMinutes,
+        reminderEnabled: true,
+      };
+      draftRef.current = nextDraft;
+      setDraft(nextDraft);
       commitPatch({ reminder: toRelativeReminder(nextMinutes) });
     };
 
@@ -326,7 +489,7 @@ export function TaskItem({
     }
 
     // `-`, `=`, `+` are reserved for decrement/increment shortcuts.
-    if (event.key === '-' || event.key === '=' || event.key === '+') {
+    if (getStepDelta(event) != null) {
       return;
     }
 
@@ -355,6 +518,118 @@ export function TaskItem({
         ...(next.repeatType === 'monthly' ? { dayOfMonth: next.repeatDaysOfMonth } : {}),
       },
     });
+  };
+
+  const toggleRepeatEnabled = () => {
+    const currentDraft = draftRef.current;
+    if (currentDraft.repeatType === 'none') {
+      const restore = lastEnabledRepeatRef.current;
+      applyRepeatDraft({
+        repeatType: restore.repeatType === 'none' ? 'daily' : restore.repeatType,
+        repeatDaysOfWeek: restore.repeatDaysOfWeek,
+        repeatDaysOfMonth: restore.repeatDaysOfMonth,
+      });
+      return;
+    }
+
+    lastEnabledRepeatRef.current = {
+      repeatType: currentDraft.repeatType,
+      repeatDaysOfWeek: currentDraft.repeatDaysOfWeek,
+      repeatDaysOfMonth: currentDraft.repeatDaysOfMonth,
+    };
+    setActivePanel(null);
+    applyRepeatDraft({
+      repeatType: 'none',
+      repeatDaysOfWeek: currentDraft.repeatDaysOfWeek,
+      repeatDaysOfMonth: currentDraft.repeatDaysOfMonth,
+    });
+  };
+
+  const applyInputCaret = (input: HTMLInputElement | null, pos: number) => {
+    if (!input) {
+      return;
+    }
+    requestAnimationFrame(() => {
+      input.setSelectionRange(pos, pos);
+    });
+  };
+
+  const commitWeeklyInput = () => {
+    const cleaned = sanitizeNumericCommaInput(weeklyRepeatInput);
+    const parsed = parseCommaInts(cleaned).filter(isWeeklyValueAllowed);
+    const canonical = parsed.join(',');
+    setWeeklyRepeatInput(canonical);
+    applyRepeatDraft({
+      repeatType: 'weekly',
+      repeatDaysOfWeek: parsed,
+      repeatDaysOfMonth: draftRef.current.repeatDaysOfMonth,
+    });
+  };
+
+  const handleWeeklyInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (weeklyComposingRef.current) {
+      setWeeklyRepeatInput(event.target.value);
+      return;
+    }
+    const raw = event.target.value;
+    const caret = event.target.selectionStart ?? raw.length;
+    const next = sanitizeNumericCommaInputForEditing(raw);
+    setWeeklyRepeatInput(next);
+    if (next !== raw) {
+      applyInputCaret(weeklyInputRef.current, getSanitizedCaretPosition(raw, caret, false));
+    }
+
+    const parsed = parseCommaInts(next).filter(isWeeklyValueAllowed);
+    applyRepeatDraft({
+      repeatType: 'weekly',
+      repeatDaysOfWeek: parsed,
+      repeatDaysOfMonth: draftRef.current.repeatDaysOfMonth,
+    });
+  };
+
+  const computeMonthlyError = (raw: string): string | null => {
+    const cleaned = sanitizeNumericCommaInput(raw);
+    return validateMonthlyTokens(cleaned).ok ? null : '仅支持 1–31 的日期（用英文逗号分隔）';
+  };
+
+  const commitMonthlyInput = (): boolean => {
+    const cleaned = sanitizeNumericCommaInput(monthlyRepeatInput);
+    const result = validateMonthlyTokens(cleaned);
+    setMonthlyRepeatInput(cleaned);
+    if (!result.ok) {
+      setMonthlyRepeatInputError('仅支持 1–31 的日期（用英文逗号分隔）');
+      return false;
+    }
+    const canonical = result.values.join(',');
+    setMonthlyRepeatInput(canonical);
+    setMonthlyRepeatInputError(null);
+    applyRepeatDraft({
+      repeatType: 'monthly',
+      repeatDaysOfWeek: draftRef.current.repeatDaysOfWeek,
+      repeatDaysOfMonth: result.values,
+    });
+    return true;
+  };
+
+  const handleMonthlyInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (monthlyComposingRef.current) {
+      setMonthlyRepeatInput(event.target.value);
+      return;
+    }
+    const raw = event.target.value;
+    const caret = event.target.selectionStart ?? raw.length;
+    const next = sanitizeNumericCommaInputForEditing(raw);
+    setMonthlyRepeatInput(next);
+    setMonthlyRepeatInputError(computeMonthlyError(next));
+    if (next !== raw) {
+      applyInputCaret(monthlyInputRef.current, getSanitizedCaretPosition(raw, caret, false));
+    }
+  };
+
+  const setTaskList = (nextListId: string | undefined) => {
+    const normalized = nextListId ?? '__none__';
+    setSelectedListId(normalized);
+    commitPatch({ listId: nextListId });
   };
 
   if (!isExpanded) {
@@ -397,7 +672,13 @@ export function TaskItem({
   const rowTagBase =
     'inline-flex h-[26px] items-center gap-1.5 rounded-md bg-gray-100/70 px-2 py-[2px] text-[12px] font-medium text-slate-600 transition-colors';
   const rowTagInteractive = `${rowTagBase} hover:bg-gray-200/70`;
-
+  const canUseReminder = Boolean(draft.dueDate && draft.time);
+  const listSelectOptions = lists.map((item) => ({
+    value: item.id,
+    label: item.name,
+    icon: item.icon,
+  }));
+  const repeatEnabled = draft.repeatType !== 'none';
   return (
     <article
       data-task-item-id={task.id}
@@ -433,161 +714,361 @@ export function TaskItem({
             <div className="min-h-0 overflow-hidden">
               <div className="space-y-2.5 pb-1" onClick={stopRowToggle}>
                 <div className="flex flex-wrap items-center gap-1.5">
-                  {(draft.dueDate || draft.time) ? (
-                    <label className={rowTagBase}>
-                      <Calendar size={13} className="text-slate-400" />
-                      {draft.dueDate ? (
-                        <input
-                          type="date"
-                          value={draft.dueDate}
-                          onChange={(event) => setDraft((prev) => ({ ...prev, dueDate: event.target.value }))}
-                          onKeyDown={withRestrictedStepKeys('date')}
-                          onPaste={(event) => event.preventDefault()}
-                          onBlur={() => commitPatch({ dueDate: draft.dueDate || null })}
-                          className="min-w-0 bg-transparent text-[12px] font-medium text-slate-600 outline-none"
-                        />
-                      ) : (
-                        <span className="text-[12px] text-slate-500">日期</span>
-                      )}
-                      {draft.time ? <span className="text-slate-400">·</span> : null}
-                      {draft.time ? (
-                        <input
-                          type="time"
-                          value={draft.time}
-                          onChange={(event) => setDraft((prev) => ({ ...prev, time: event.target.value }))}
-                          onKeyDown={withRestrictedStepKeys('time')}
-                          onPaste={(event) => event.preventDefault()}
-                          onBlur={() => commitPatch({ time: draft.time || null })}
-                          className="w-[62px] bg-transparent text-[12px] font-medium text-slate-600 outline-none"
-                        />
-                      ) : null}
-                    </label>
-                  ) : null}
+                  <label className={rowTagBase}>
+                    <Calendar size={13} className="text-slate-400" />
+                    <input
+                      type="date"
+                      value={draft.dueDate}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, dueDate: event.target.value }))}
+                      onKeyDown={withRestrictedStepKeys('date')}
+                      onPaste={(event) => event.preventDefault()}
+                      onBlur={() => commitPatch({ dueDate: draft.dueDate || null })}
+                      className={`min-w-0 bg-transparent text-[12px] font-medium outline-none ${
+                        draft.dueDate ? 'text-slate-600' : 'text-slate-500'
+                      }`}
+                    />
+                  </label>
 
-                  {draft.reminderEnabled ? (
-                    <label className={rowTagBase}>
-                      <Bell size={13} className="text-slate-400" />
+                  <label className={rowTagBase}>
+                    <Clock3 size={13} className="text-slate-400" />
+                    <input
+                      type="time"
+                      value={draft.time}
+                      onChange={(event) => setDraft((prev) => ({ ...prev, time: event.target.value }))}
+                      onKeyDown={withRestrictedStepKeys('time')}
+                      onPaste={(event) => event.preventDefault()}
+                      onBlur={() => commitPatch({ time: draft.time || null })}
+                      className={`w-[62px] bg-transparent text-[12px] font-medium outline-none ${
+                        draft.time ? 'text-slate-600' : 'text-slate-500'
+                      }`}
+                    />
+                  </label>
+
+                  <div className={`${rowTagBase} ${!canUseReminder && !draft.reminderEnabled ? 'opacity-70' : ''}`}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!canUseReminder && !draftRef.current.reminderEnabled) {
+                            return;
+                          }
+                          const nextEnabled = !draftRef.current.reminderEnabled;
+                          const nextDraft = { ...draftRef.current, reminderEnabled: nextEnabled };
+                          draftRef.current = nextDraft;
+                          setDraft(nextDraft);
+                          commitPatch({
+                            reminder: nextEnabled ? toRelativeReminder(nextDraft.reminderMinutes) : null,
+                          });
+                        }}
+                        className={`rounded-sm p-0.5 transition ${
+                          draft.reminderEnabled
+                            ? 'bg-amber-100 text-amber-600 hover:bg-amber-200/80'
+                            : 'text-slate-400 hover:bg-white/70'
+                        }`}
+                        disabled={!canUseReminder && !draft.reminderEnabled}
+                        aria-label={draft.reminderEnabled ? '关闭提醒' : '开启提醒'}
+                        title={draft.reminderEnabled ? '关闭提醒' : '开启提醒'}
+                      >
+                        <Bell size={13} className={draft.reminderEnabled ? 'text-amber-600' : 'text-slate-400'} />
+                      </button>
                       <span>提前</span>
                       <input
-                        type="number"
-                        min={0}
+                        type="text"
+                        inputMode="numeric"
                         value={draft.reminderMinutes}
+                        disabled={!draft.reminderEnabled}
                         onChange={(event) =>
-                          setDraft((prev) => ({
-                            ...prev,
-                            reminderMinutes: Math.max(0, Number(event.target.value) || 0),
-                          }))
+                          setDraft((prev) => {
+                            const digitsOnly = event.target.value.replace(/\D+/g, '');
+                            return {
+                              ...prev,
+                              reminderMinutes: digitsOnly ? Math.max(0, Number(digitsOnly)) : 0,
+                            };
+                          })
                         }
                         onKeyDown={withRestrictedStepKeys('reminder')}
                         onPaste={(event) => event.preventDefault()}
-                        onBlur={() => commitPatch({ reminder: toRelativeReminder(draft.reminderMinutes) })}
-                        className="w-9 bg-transparent text-[12px] font-medium text-slate-600 outline-none"
+                        onBlur={() => {
+                          if (!draftRef.current.reminderEnabled) {
+                            return;
+                          }
+                          commitPatch({ reminder: toRelativeReminder(draftRef.current.reminderMinutes) });
+                        }}
+                        className={`w-9 bg-transparent text-[12px] font-medium outline-none ${
+                          draft.reminderEnabled ? 'text-slate-600' : 'cursor-not-allowed text-slate-400'
+                        }`}
                       />
-                      <span>分钟</span>
-                    </label>
-                  ) : null}
+                      <span className={draft.reminderEnabled ? '' : 'text-slate-400'}>分钟</span>
+                  </div>
 
-                  {draft.repeatType !== 'none' || activePanel === 'repeat' ? (
-                    <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setActivePanel((prev) => (prev === 'repeat' ? null : 'repeat'))}
-                      className={rowTagInteractive}
-                    >
-                      <Repeat2 size={13} className="text-slate-400" />
-                      <span>{getRepeatSummaryLabel(draft.repeatType, draft.repeatDaysOfWeek, draft.repeatDaysOfMonth)}</span>
-                    </button>
+                  <div className="relative">
+                    <div className={rowTagBase}>
+                      <button
+                        type="button"
+                        onClick={() => toggleRepeatEnabled()}
+                        className={`inline-flex h-5 w-5 items-center justify-center rounded-sm transition ${
+                          repeatEnabled ? 'bg-amber-100 text-amber-600 hover:bg-amber-200/80' : 'bg-white text-slate-400 hover:bg-slate-50'
+                        }`}
+                        aria-label={repeatEnabled ? '关闭重复' : '开启重复'}
+                        title={repeatEnabled ? '关闭重复' : '开启重复'}
+                      >
+                        <Repeat2 size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={!repeatEnabled}
+                        onClick={() => {
+                          if (!repeatEnabled) {
+                            return;
+                          }
+                          setActivePanel((prev) => (prev === 'repeat' ? null : 'repeat'));
+                        }}
+                        className={`inline-flex items-center gap-1 rounded-sm px-0.5 transition ${
+                          repeatEnabled
+                            ? 'text-slate-600 hover:text-slate-800'
+                            : 'cursor-default text-slate-400'
+                        }`}
+                      >
+                        <span>{getRepeatSummaryLabel(draft.repeatType, draft.repeatDaysOfWeek, draft.repeatDaysOfMonth)}</span>
+                      </button>
+                    </div>
                     {activePanel === 'repeat' ? (
                       <TaskControlPopover className="w-[300px]">
                         <div onClick={stopRowToggle} className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <span className="text-xs text-slate-400">重复</span>
-                            <AppSelect
-                              value={draft.repeatType}
-                              onChange={(selected) =>
-                                applyRepeatDraft({
-                                  repeatType: selected as RepeatType | 'none',
-                                  repeatDaysOfWeek: draft.repeatDaysOfWeek,
-                                  repeatDaysOfMonth: draft.repeatDaysOfMonth,
-                                })
-                              }
-                              options={[
-                                { value: 'none', label: '不重复' },
-                                { value: 'daily', label: '每天' },
-                                { value: 'weekly', label: '每周' },
-                                { value: 'monthly', label: '每月' },
-                              ]}
-                              className="w-28"
-                            />
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {([
+                              { value: 'daily', label: '每天' },
+                              { value: 'weekly', label: '每周' },
+                              { value: 'monthly', label: '每月' },
+                            ] as const).map((option) => {
+                              const isActive = draft.repeatType === option.value;
+                              return (
+                                <button
+                                  key={option.value}
+                                  type="button"
+                                  onClick={() =>
+                                    applyRepeatDraft({
+                                      repeatType: option.value,
+                                      repeatDaysOfWeek: draft.repeatDaysOfWeek,
+                                      repeatDaysOfMonth: draft.repeatDaysOfMonth,
+                                    })
+                                  }
+                                  className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                                    isActive
+                                      ? 'bg-slate-100 text-slate-700 ring-1 ring-slate-200/80'
+                                      : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                                  }`}
+                                >
+                                  {option.label}
+                                </button>
+                              );
+                            })}
                           </div>
                           {draft.repeatType === 'weekly' ? (
-                            <div className="flex flex-wrap gap-1">
-                              {WEEK_LABELS.map((label, day) => {
-                                const active = draft.repeatDaysOfWeek.includes(day);
-                                return (
-                                  <button
-                                    key={label}
-                                    type="button"
-                                    onClick={() => {
-                                      const next = active
-                                        ? draft.repeatDaysOfWeek.filter((item) => item !== day)
-                                        : [...draft.repeatDaysOfWeek, day];
-                                      applyRepeatDraft({
-                                        repeatType: 'weekly',
-                                        repeatDaysOfWeek: next,
-                                        repeatDaysOfMonth: draft.repeatDaysOfMonth,
-                                      });
-                                    }}
-                                    className={`rounded-md px-2 py-1 text-xs ${active ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                                  >
-                                    周{label}
-                                  </button>
-                                );
-                              })}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap gap-1">
+                                {WEEK_LABELS.map((label, day) => {
+                                  const active = draft.repeatDaysOfWeek.includes(day);
+                                  return (
+                                    <button
+                                      key={label}
+                                      type="button"
+                                      onClick={() => {
+                                        const next = active
+                                          ? draft.repeatDaysOfWeek.filter((item) => item !== day)
+                                          : [...draft.repeatDaysOfWeek, day];
+                                        const canonical = [...new Set(next.filter(isWeeklyValueAllowed))]
+                                          .sort((a, b) => a - b)
+                                          .join(',');
+                                        setWeeklyRepeatInput(canonical);
+                                        applyRepeatDraft({
+                                          repeatType: 'weekly',
+                                          repeatDaysOfWeek: next,
+                                          repeatDaysOfMonth: draft.repeatDaysOfMonth,
+                                        });
+                                      }}
+                                      className={`rounded-md px-2 py-1 text-xs ${active ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                    >
+                                      周{label}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <input
+                                ref={weeklyInputRef}
+                                value={weeklyRepeatInput}
+                                placeholder="0,2,5"
+                                inputMode="numeric"
+                                onChange={handleWeeklyInputChange}
+                                onKeyDown={(event) => {
+                                  if (!isAllowedNumericCommaKey(event)) {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    return;
+                                  }
+                                  if (event.key === 'Enter') {
+                                    event.preventDefault();
+                                    commitWeeklyInput();
+                                    event.currentTarget.blur();
+                                  }
+                                }}
+                                onPaste={(event) => {
+                                  event.preventDefault();
+                                  const raw = event.clipboardData.getData('text');
+                                  const cleanedPaste = sanitizeNumericCommaInputForEditing(raw);
+                                  const input = event.currentTarget;
+                                  const current = weeklyRepeatInput;
+                                  const start = input.selectionStart ?? current.length;
+                                  const end = input.selectionEnd ?? current.length;
+                                  const nextRaw = `${current.slice(0, start)}${cleanedPaste}${current.slice(end)}`;
+                                  const nextValue = sanitizeNumericCommaInputForEditing(nextRaw);
+                                  setWeeklyRepeatInput(nextValue);
+                                  applyInputCaret(
+                                    weeklyInputRef.current,
+                                    getSanitizedCaretPosition(nextRaw, start + cleanedPaste.length, false),
+                                  );
+                                  const parsed = parseCommaInts(nextValue).filter(isWeeklyValueAllowed);
+                                  applyRepeatDraft({
+                                    repeatType: 'weekly',
+                                    repeatDaysOfWeek: parsed,
+                                    repeatDaysOfMonth: draftRef.current.repeatDaysOfMonth,
+                                  });
+                                }}
+                                onCompositionStart={() => {
+                                  weeklyComposingRef.current = true;
+                                }}
+                                onCompositionEnd={(event) => {
+                                  weeklyComposingRef.current = false;
+                                  const raw = event.currentTarget.value;
+                                  const caret = event.currentTarget.selectionStart ?? raw.length;
+                                  const next = sanitizeNumericCommaInput(raw);
+                                  setWeeklyRepeatInput(next);
+                                  applyInputCaret(weeklyInputRef.current, getSanitizedCaretPosition(raw, caret, true));
+                                  const parsed = parseCommaInts(next).filter(isWeeklyValueAllowed);
+                                  applyRepeatDraft({
+                                    repeatType: 'weekly',
+                                    repeatDaysOfWeek: parsed,
+                                    repeatDaysOfMonth: draftRef.current.repeatDaysOfMonth,
+                                  });
+                                }}
+                                onBlur={commitWeeklyInput}
+                                className="w-full rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:ring-1 focus:ring-slate-300/70"
+                              />
                             </div>
                           ) : null}
                           {draft.repeatType === 'monthly' ? (
-                            <div className="flex flex-wrap gap-1">
-                              {QUICK_MONTH_DAYS.map((day) => {
-                                const active = draft.repeatDaysOfMonth.includes(day);
-                                return (
-                                  <button
-                                    key={day}
-                                    type="button"
-                                    onClick={() => {
-                                      const next = active
-                                        ? draft.repeatDaysOfMonth.filter((item) => item !== day)
-                                        : [...draft.repeatDaysOfMonth, day];
-                                      applyRepeatDraft({
-                                        repeatType: 'monthly',
-                                        repeatDaysOfWeek: draft.repeatDaysOfWeek,
-                                        repeatDaysOfMonth: next,
-                                      });
-                                    }}
-                                    className={`rounded-md px-2 py-1 text-xs ${active ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
-                                  >
-                                    {day}号
-                                  </button>
-                                );
-                              })}
+                            <div className="space-y-2">
+                              <div className="flex flex-wrap gap-1">
+                                {QUICK_MONTH_DAYS.map((day) => {
+                                  const active = draft.repeatDaysOfMonth.includes(day);
+                                  return (
+                                    <button
+                                      key={day}
+                                      type="button"
+                                      onClick={() => {
+                                        const next = active
+                                          ? draft.repeatDaysOfMonth.filter((item) => item !== day)
+                                          : [...draft.repeatDaysOfMonth, day];
+                                        const canonical = [...new Set(next.filter((n) => n >= 1 && n <= 31))]
+                                          .sort((a, b) => a - b)
+                                          .join(',');
+                                        setMonthlyRepeatInput(canonical);
+                                        setMonthlyRepeatInputError(null);
+                                        applyRepeatDraft({
+                                          repeatType: 'monthly',
+                                          repeatDaysOfWeek: draft.repeatDaysOfWeek,
+                                          repeatDaysOfMonth: next,
+                                        });
+                                      }}
+                                      className={`rounded-md px-2 py-1 text-xs ${active ? 'bg-slate-700 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+                                    >
+                                      {day}号
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <div>
+                                <input
+                                  ref={monthlyInputRef}
+                                  value={monthlyRepeatInput}
+                                  placeholder="1,15,28"
+                                  inputMode="numeric"
+                                  onChange={handleMonthlyInputChange}
+                                  onKeyDown={(event) => {
+                                    if (!isAllowedNumericCommaKey(event)) {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      return;
+                                    }
+                                    if (event.key === 'Enter') {
+                                      event.preventDefault();
+                                      const ok = commitMonthlyInput();
+                                      if (ok) {
+                                        event.currentTarget.blur();
+                                      }
+                                    }
+                                  }}
+                                  onPaste={(event) => {
+                                    event.preventDefault();
+                                    const raw = event.clipboardData.getData('text');
+                                    const cleanedPaste = sanitizeNumericCommaInputForEditing(raw);
+                                    const input = event.currentTarget;
+                                    const current = monthlyRepeatInput;
+                                    const start = input.selectionStart ?? current.length;
+                                    const end = input.selectionEnd ?? current.length;
+                                    const nextRaw = `${current.slice(0, start)}${cleanedPaste}${current.slice(end)}`;
+                                    const nextValue = sanitizeNumericCommaInputForEditing(nextRaw);
+                                    setMonthlyRepeatInput(nextValue);
+                                    setMonthlyRepeatInputError(computeMonthlyError(nextValue));
+                                    applyInputCaret(
+                                      monthlyInputRef.current,
+                                      getSanitizedCaretPosition(nextRaw, start + cleanedPaste.length, false),
+                                    );
+                                  }}
+                                  onCompositionStart={() => {
+                                    monthlyComposingRef.current = true;
+                                  }}
+                                  onCompositionEnd={(event) => {
+                                    monthlyComposingRef.current = false;
+                                    const raw = event.currentTarget.value;
+                                    const caret = event.currentTarget.selectionStart ?? raw.length;
+                                    const next = sanitizeNumericCommaInput(raw);
+                                    setMonthlyRepeatInput(next);
+                                    setMonthlyRepeatInputError(computeMonthlyError(next));
+                                    applyInputCaret(monthlyInputRef.current, getSanitizedCaretPosition(raw, caret, true));
+                                  }}
+                                  onBlur={commitMonthlyInput}
+                                  className={`w-full rounded-lg border bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:ring-1 ${
+                                    monthlyRepeatInputError
+                                      ? 'border-red-300 ring-1 ring-red-400/60 focus:ring-red-400/60'
+                                      : 'border-slate-200 focus:ring-slate-300/70'
+                                  }`}
+                                />
+                                {monthlyRepeatInputError ? (
+                                  <p className="mt-1 text-xs text-red-600">仅支持 1–31 的日期（用英文逗号分隔）</p>
+                                ) : null}
+                              </div>
                             </div>
                           ) : null}
                         </div>
                       </TaskControlPopover>
                     ) : null}
-                    </div>
-                  ) : null}
+                  </div>
 
                   <button type="button" onClick={() => onOpenActionPicker(task)} className={rowTagInteractive}>
                     <Link2 size={13} className="text-slate-400" />
                     <span>动作</span>
                   </button>
 
-                  {showListInfo && list ? (
-                    <div className={`${rowTagBase} ml-auto`}>
-                      <span className="text-slate-500">{`${list.icon} ${list.name}`}</span>
-                    </div>
-                  ) : null}
+                  <div className="ml-auto flex min-w-0 items-center gap-1.5">
+                    <AppSelect
+                      value={selectedListId}
+                      onChange={(value) => setTaskList(value === '__none__' ? undefined : value)}
+                      options={[{ value: '__none__', label: '无', icon: '∅' }, ...listSelectOptions]}
+                      variant="inline-chip"
+                      className="w-[150px] min-w-0"
+                      menuClassName="min-w-[180px]"
+                    />
+                  </div>
                 </div>
 
                 <div className="px-0.5 py-0.5">

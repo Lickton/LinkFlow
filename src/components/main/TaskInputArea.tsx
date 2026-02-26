@@ -1,6 +1,5 @@
-import { Bell, Calendar, Circle, Clock3, Link2, Repeat2 } from 'lucide-react';
+import { Bell, Calendar, Check, ChevronDown, Circle, Clock3, Link2, List as ListIcon, Repeat2 } from 'lucide-react';
 import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { AppSelect } from '../common/AppSelect';
 import type { List, RepeatType, TaskReminder } from '../../types/models';
 import { toRelativeReminder } from '../../utils/schedule';
 import {
@@ -183,6 +182,7 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
   const launcherButtonRef = useRef<HTMLButtonElement>(null);
   const composerCardRef = useRef<HTMLDivElement>(null);
   const rootRef = useRef<HTMLDivElement>(null);
+  const listMenuRef = useRef<HTMLDivElement>(null);
   const nativePickerOpenRef = useRef(false);
   const [ui, dispatchUi] = useReducer(uiReducer, {
     ...initialUiState,
@@ -196,6 +196,7 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
   const canUseRelativeReminder = Boolean(dueDate && time);
   const [isExpanded, setIsExpanded] = useState(false);
   const [expandedHeight, setExpandedHeight] = useState(0);
+  const [isListMenuOpen, setIsListMenuOpen] = useState(false);
   const hasDraftPayload = Boolean(
     value.trim() ||
       detail?.trim() ||
@@ -204,6 +205,21 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
       reminder ||
       repeatType !== 'none' ||
       (actions?.length ?? 0) > 0,
+  );
+  const listOptions = useMemo(
+    () => [
+      { value: '__none__', label: '无' },
+      ...((lists ?? []).map((list) => ({
+        value: list.id,
+        label: list.name,
+      })) as { value: string; label: string }[]),
+    ],
+    [lists],
+  );
+  const selectedListValue = selectedListId ?? '__none__';
+  const selectedListLabel = useMemo(
+    () => listOptions.find((option) => option.value === selectedListValue)?.label ?? '无',
+    [listOptions, selectedListValue],
   );
 
   const focusTitleSoon = () => {
@@ -279,6 +295,42 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
     return () => window.removeEventListener('mousedown', onPointerDown);
   }, [isExpanded, ui.activePanel, suspendAutoCollapse]);
 
+  useEffect(() => {
+    if (!isListMenuOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+      if (listMenuRef.current?.contains(target)) {
+        return;
+      }
+      setIsListMenuOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setIsListMenuOpen(false);
+      }
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [isListMenuOpen]);
+
+  useEffect(() => {
+    if (ui.activePanel) {
+      setIsListMenuOpen(false);
+    }
+  }, [ui.activePanel]);
+
   useImperativeHandle(
     ref,
     () => ({
@@ -295,6 +347,7 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
     if (ui.activePanel) {
       dispatchUi({ type: 'UI_CLOSE_PANEL' });
     }
+    setIsListMenuOpen(false);
   };
 
   const handleCancelQuickEntry = () => {
@@ -442,6 +495,7 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
             active={ui.activePanel === 'time' || Boolean(time)}
             muted={!time && ui.activePanel !== 'time'}
             onClick={() => {
+              setIsListMenuOpen(false);
               if (shouldUseNativeTimePicker) {
                 const input = timePickerInputRef.current;
                 if (!input) {
@@ -590,31 +644,42 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
             label={getRepeatSummaryLabel(repeatType, repeatDaysOfWeek, repeatDaysOfMonth)}
             active={ui.activePanel === 'repeat'}
             muted={repeatType === 'none' && ui.activePanel !== 'repeat'}
-            onClick={() =>
+            onClick={() => {
+              setIsListMenuOpen(false);
               dispatchUi({
                 type: ui.activePanel === 'repeat' ? 'UI_CLOSE_PANEL' : 'UI_OPEN_PANEL',
                 panel: 'repeat',
                 currentTime: time,
-              })
-            }
+              });
+            }}
           />
 
           {ui.activePanel === 'repeat' ? (
             <TaskControlPopover className="w-[320px]">
               <div className="flex flex-col gap-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <label className="text-xs text-slate-400">重复</label>
-                  <AppSelect
-                    value={repeatType}
-                    onChange={(selected) => onRepeatTypeChange(selected as RepeatType | 'none')}
-                    options={[
-                      { value: 'none', label: '不重复' },
-                      { value: 'daily', label: '每天' },
-                      { value: 'weekly', label: '每周' },
-                      { value: 'monthly', label: '每月' },
-                    ]}
-                    className="w-28"
-                  />
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {([
+                    { value: 'none', label: '不重复' },
+                    { value: 'daily', label: '每天' },
+                    { value: 'weekly', label: '每周' },
+                    { value: 'monthly', label: '每月' },
+                  ] as const).map((option) => {
+                    const active = repeatType === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => onRepeatTypeChange(option.value)}
+                        className={`rounded-md px-2.5 py-1 text-xs font-medium transition ${
+                          active
+                            ? 'bg-slate-100 text-slate-700 ring-1 ring-slate-200/80'
+                            : 'text-slate-500 hover:bg-slate-100 hover:text-slate-700'
+                        }`}
+                      >
+                        {option.label}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {repeatType === 'weekly' ? (
@@ -689,19 +754,54 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
         <TaskAttributeTag icon={<Link2 size={12} />} label="动作" highlight onClick={onOpenActionPicker} />
 
         {showListPicker ? (
-          <AppSelect
-            value={selectedListId ?? '__none__'}
-            onChange={(selected) => onSelectedListChange?.(selected === '__none__' ? null : selected)}
-            options={[
-              { value: '__none__', label: '无', icon: '∅' },
-              ...((lists ?? []).map((list) => ({
-                value: list.id,
-                label: list.name,
-                icon: list.icon,
-              })) as { value: string; label: string; icon: string }[]),
-            ]}
-            className="ml-auto w-48"
-          />
+          <div ref={listMenuRef} className="relative ml-auto w-fit">
+            <TaskAttributeTag
+              onClick={() => {
+                if (!isListMenuOpen) {
+                  dispatchUi({ type: 'UI_CLOSE_PANEL' });
+                }
+                setIsListMenuOpen((prev) => !prev);
+              }}
+              className="h-auto rounded-md border-transparent bg-gray-100/70 px-2 py-[2px] text-[12px] text-gray-600 hover:bg-gray-200/70"
+              icon={<ListIcon className="h-3.5 w-3.5 text-gray-400" />}
+              label={
+                <span className="max-w-[140px] truncate text-[12px] text-gray-600">
+                  {selectedListLabel}
+                </span>
+              }
+            >
+              <ChevronDown className="h-3.5 w-3.5 text-gray-400" />
+            </TaskAttributeTag>
+
+            {isListMenuOpen ? (
+              <TaskControlPopover className="left-auto right-0 z-40 mt-1 min-w-full w-max rounded-xl bg-white/95 p-1.5 ring-slate-200/60 shadow-[0_8px_20px_rgba(15,23,42,0.08)] backdrop-blur-sm">
+                <div className="max-h-64 overflow-y-auto">
+                  {listOptions.map((option) => {
+                    const isSelected = option.value === selectedListValue;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        onClick={() => {
+                          onSelectedListChange?.(option.value === '__none__' ? null : option.value);
+                          setIsListMenuOpen(false);
+                        }}
+                        className={`flex h-8 w-full items-center justify-between gap-3 rounded-lg px-2.5 text-left text-[12px] font-medium text-slate-600 transition-colors hover:bg-slate-100/80 focus:outline-none focus:ring-2 focus:ring-linkflow-accent/10 ${
+                          isSelected ? 'bg-slate-100/70' : ''
+                        }`}
+                      >
+                        <span className="inline-flex min-w-0 items-center gap-2">
+                          <ListIcon className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                          <span className="truncate">{option.label}</span>
+                        </span>
+                        {isSelected ? <Check className="h-3.5 w-3.5 shrink-0 text-slate-500" /> : null}
+                      </button>
+                    );
+                  })}
+                </div>
+              </TaskControlPopover>
+            ) : null}
+          </div>
         ) : null}
             </div>
           </div>

@@ -16,6 +16,22 @@ const WEEK_LABELS = ['日', '一', '二', '三', '四', '五', '六'];
 const QUICK_MONTH_DAYS = [1, 5, 10, 15, 20, 25, 31];
 const REMINDER_PRESETS = [0, 1, 2, 5, 10];
 
+function getStepDelta(event: React.KeyboardEvent<HTMLInputElement>): -1 | 1 | null {
+  if (event.code === 'Minus' || event.code === 'NumpadSubtract') {
+    return -1;
+  }
+  if (event.code === 'Equal' || event.code === 'NumpadAdd') {
+    return 1;
+  }
+  if (event.key === '-') {
+    return -1;
+  }
+  if (event.key === '=' || event.key === '+') {
+    return 1;
+  }
+  return null;
+}
+
 export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalProps) {
   const [title, setTitle] = useState('');
   const [dueDate, setDueDate] = useState<string | null>(null);
@@ -42,6 +58,15 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
   }, [isOpen, task]);
 
   const monthDaysText = useMemo(() => repeatDaysOfMonth.join(','), [repeatDaysOfMonth]);
+  const handleReminderStepKey = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const delta = getStepDelta(event);
+    if (delta == null) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    setReminderOffsetMinutes((prev) => Math.max(0, prev + delta));
+  };
 
   if (!isOpen || !task) {
     return null;
@@ -138,10 +163,14 @@ export function TaskEditModal({ task, isOpen, onClose, onSave }: TaskEditModalPr
                 </button>
               ))}
               <input
-                type="number"
-                min={0}
+                type="text"
+                inputMode="numeric"
                 value={reminderOffsetMinutes}
-                onChange={(event) => setReminderOffsetMinutes(Math.max(0, Number(event.target.value) || 0))}
+                onChange={(event) => {
+                  const digitsOnly = event.target.value.replace(/\D+/g, '');
+                  setReminderOffsetMinutes(digitsOnly ? Math.max(0, Number(digitsOnly)) : 0);
+                }}
+                onKeyDown={handleReminderStepKey}
                 className="w-20 rounded-lg border border-gray-200 px-2 py-1 text-sm text-gray-700 outline-none ring-linkflow-accent/20 focus:ring"
               />
               <span className="text-xs text-gray-400">分钟</span>

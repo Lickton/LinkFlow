@@ -1,5 +1,5 @@
 import { forwardRef } from 'react';
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, HTMLAttributes, LabelHTMLAttributes, ReactNode } from 'react';
 
 interface TaskShellProps {
   children: ReactNode;
@@ -170,7 +170,7 @@ interface TaskControlPopoverProps {
 export function TaskControlPopover({ children, className = '' }: TaskControlPopoverProps) {
   return (
     <div
-      className={`absolute left-0 top-full z-30 mt-2 rounded-xl bg-white p-3 ring-1 ring-slate-200/80 shadow-[0_10px_24px_rgba(15,23,42,0.10)] ${className}`}
+      className={`absolute left-0 top-full z-[120] mt-2 rounded-xl bg-white p-3 ring-1 ring-slate-200/80 shadow-[0_10px_24px_rgba(15,23,42,0.10)] ${className}`}
     >
       {children}
     </div>
@@ -241,5 +241,57 @@ export function TaskControlInput({ className = '', children }: TaskControlInputP
     >
       {children}
     </span>
+  );
+}
+
+const TASK_INLINE_TOOLBAR_CHIP_BASE_CLASS =
+  'inline-flex h-[26px] items-center gap-1.5 rounded-md bg-gray-100/70 px-2 py-[2px] text-[12px] font-medium text-slate-600 transition-colors';
+
+interface TaskInlineToolbarChipProps extends HTMLAttributes<HTMLDivElement> {
+  children: ReactNode;
+}
+
+export function TaskInlineToolbarChip({ children, className = '', ...props }: TaskInlineToolbarChipProps) {
+  return (
+    <div className={`${TASK_INLINE_TOOLBAR_CHIP_BASE_CLASS} ${className}`} {...props}>
+      {children}
+    </div>
+  );
+}
+
+interface TaskInlineToolbarLabelChipProps extends LabelHTMLAttributes<HTMLLabelElement> {
+  children: ReactNode;
+}
+
+export function TaskInlineToolbarLabelChip({
+  children,
+  className = '',
+  ...props
+}: TaskInlineToolbarLabelChipProps) {
+  return (
+    <label className={`${TASK_INLINE_TOOLBAR_CHIP_BASE_CLASS} ${className}`} {...props}>
+      {children}
+    </label>
+  );
+}
+
+interface TaskInlineToolbarButtonChipProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  children: ReactNode;
+}
+
+export function TaskInlineToolbarButtonChip({
+  children,
+  className = '',
+  type = 'button',
+  ...props
+}: TaskInlineToolbarButtonChipProps) {
+  return (
+    <button
+      type={type}
+      className={`${TASK_INLINE_TOOLBAR_CHIP_BASE_CLASS} hover:bg-gray-200/70 ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
   );
 }

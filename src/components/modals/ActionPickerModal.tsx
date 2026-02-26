@@ -52,6 +52,21 @@ export function ActionPickerModal({
     setQuery('');
   }, [initialActions, isOpen, schemes]);
 
+  useEffect(() => {
+    if (!isOpen) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        onClose();
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [isOpen, onClose]);
+
   const selectedSchemeIds = useMemo(
     () => new Set(selectedActions.map((action) => action.schemeId)),
     [selectedActions],
@@ -86,7 +101,7 @@ export function ActionPickerModal({
     return action.params.some((value) => value.trim() === '');
   };
 
-  const confirmDisabled = selectedActions.length === 0 || selectedActions.some(isActionInvalid);
+  const confirmDisabled = selectedActions.some(isActionInvalid);
 
   const addAction = (scheme: UrlScheme) => {
     setSelectedActions((prev) => [

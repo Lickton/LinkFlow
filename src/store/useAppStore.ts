@@ -96,6 +96,31 @@ const roundToFiveMinutes = (date: Date): Date => {
   return cloned;
 };
 
+const normalizeScheduleForRepeatAwareTask = (
+  fields: Parameters<typeof applyScheduleInvariants>[0],
+  hasRepeat: boolean,
+) => {
+  if (!hasRepeat) {
+    return applyScheduleInvariants(fields);
+  }
+
+  // Repeating tasks can have a time/reminder without a fixed date.
+  if (!fields.dueDate) {
+    const normalized = applyScheduleInvariants({
+      dueDate: '2000-01-01',
+      time: fields.time,
+      reminder: fields.reminder,
+    });
+    return {
+      dueDate: null,
+      time: normalized.time,
+      reminder: normalized.reminder,
+    };
+  }
+
+  return applyScheduleInvariants(fields);
+};
+
 const isSameRepeat = (a?: RepeatRule | null, b?: RepeatRule | null): boolean => {
   if (!a && !b) {
     return true;
@@ -132,12 +157,24 @@ const inferDefaultSchedule = (
       );
 
     if (previous) {
-      return applyScheduleInvariants({
-        dueDate: draft.dueDate ?? previous.dueDate ?? null,
-        time: draft.time ?? previous.time ?? null,
-        reminder: draft.reminder ?? previous.reminder ?? null,
-      });
+      return normalizeScheduleForRepeatAwareTask(
+        {
+          dueDate: draft.dueDate ?? previous.dueDate ?? null,
+          time: draft.time ?? previous.time ?? null,
+          reminder: draft.reminder ?? previous.reminder ?? null,
+        },
+        true,
+      );
     }
+
+    return normalizeScheduleForRepeatAwareTask(
+      {
+        dueDate: draft.dueDate,
+        time: draft.time,
+        reminder: draft.reminder,
+      },
+      true,
+    );
   }
 
   const normalizedDraftTime = normalizeTime(draft.time);
@@ -199,11 +236,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         lists: snapshot.lists,
         tasks: snapshot.tasks.map((task) => ({
           ...task,
-          ...applyScheduleInvariants({
-            dueDate: task.dueDate,
-            time: task.time,
-            reminder: task.reminder,
-          }),
+          ...normalizeScheduleForRepeatAwareTask(
+            {
+              dueDate: task.dueDate,
+              time: task.time,
+              reminder: task.reminder,
+            },
+            Boolean(task.repeat),
+          ),
         })),
         schemes: snapshot.schemes,
         activeListId:
@@ -291,11 +331,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: existing.id,
     };
 
-    const normalizedSchedule = applyScheduleInvariants({
-      dueDate: merged.dueDate,
-      time: merged.time,
-      reminder: merged.reminder,
-    });
+    const normalizedSchedule = normalizeScheduleForRepeatAwareTask(
+      {
+        dueDate: merged.dueDate,
+        time: merged.time,
+        reminder: merged.reminder,
+      },
+      Boolean(merged.repeat),
+    );
 
     const saved = await saveTaskInDb({
       ...merged,
@@ -372,14 +415,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     const snapshot = await importBackupInDb(path);
     set((state) => ({
       lists: snapshot.lists,
-      tasks: snapshot.tasks.map((task) => ({
-        ...task,
-        ...applyScheduleInvariants({
-          dueDate: task.dueDate,
-          time: task.time,
-          reminder: task.reminder,
-        }),
-      })),
+        tasks: snapshot.tasks.map((task) => ({
+          ...task,
+          ...normalizeScheduleForRepeatAwareTask(
+            {
+              dueDate: task.dueDate,
+              time: task.time,
+              reminder: task.reminder,
+            },
+            Boolean(task.repeat),
+          ),
+        })),
       schemes: snapshot.schemes,
       activeListId:
         state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
@@ -395,11 +441,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         ...state.draftTask,
         ...patch,
       };
-      const normalizedSchedule = applyScheduleInvariants({
-        dueDate: merged.dueDate,
-        time: merged.time,
-        reminder: merged.reminder,
-      });
+      const normalizedSchedule = normalizeScheduleForRepeatAwareTask(
+        {
+          dueDate: merged.dueDate,
+          time: merged.time,
+          reminder: merged.reminder,
+        },
+        Boolean(merged.repeat),
+      );
       return {
         draftTask: {
           ...merged,

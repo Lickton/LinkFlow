@@ -1,10 +1,10 @@
-import { Plus, Trash2, X } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { isTauri } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { AppSelect } from '../common/AppSelect';
 import type { UrlScheme } from '../../types/models';
+import { ModalHeader, ModalPortal } from './ModalPrimitives';
 
 type SchemeDraft = Omit<UrlScheme, 'id'>;
 
@@ -178,8 +178,8 @@ export function SettingsModal({
     }
   };
 
-  const content = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+  return (
+    <ModalPortal>
       <div className="flex h-[70vh] w-full max-w-4xl overflow-hidden rounded-xl bg-white shadow-lg">
         <aside className="flex w-72 shrink-0 flex-col border-r border-gray-200 bg-gray-50 p-3">
           <div className="mb-2 flex items-center justify-between px-1">
@@ -217,18 +217,7 @@ export function SettingsModal({
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col p-5">
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="text-lg font-semibold text-gray-800">
-              {selectedId ? '编辑动作' : '新建动作'}
-            </h3>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-500"
-            >
-              <X size={16} />
-            </button>
-          </div>
+          <ModalHeader title={selectedId ? '编辑动作' : '新建动作'} onClose={onClose} />
 
           <div className="grid gap-3 sm:grid-cols-2">
             <label className="block">
@@ -351,8 +340,6 @@ export function SettingsModal({
           {savedNotice ? <p className="mt-2 text-right text-xs text-green-600">{savedNotice}</p> : null}
         </section>
       </div>
-    </div>
+    </ModalPortal>
   );
-
-  return createPortal(content, document.body);
 }

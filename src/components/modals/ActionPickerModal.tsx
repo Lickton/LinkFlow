@@ -1,7 +1,6 @@
-import { X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
 import type { TaskActionBinding, UrlScheme } from '../../types/models';
+import { ModalHeader, ModalPortal } from './ModalPrimitives';
 
 interface ActionPickerModalProps {
   isOpen: boolean;
@@ -140,19 +139,10 @@ export function ActionPickerModal({
     return null;
   }
 
-  const content = (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+  return (
+    <ModalPortal>
       <div className="w-full max-w-3xl rounded-xl bg-white p-5 shadow-lg">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold text-gray-800">配置动作</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md p-1 text-gray-400 transition hover:bg-gray-100 hover:text-gray-500"
-          >
-            <X size={16} />
-          </button>
-        </div>
+        <ModalHeader title="配置动作" onClose={onClose} />
 
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
           <section className="min-h-0 rounded-lg border border-gray-200 p-3">
@@ -272,8 +262,6 @@ export function ActionPickerModal({
           </button>
         </div>
       </div>
-    </div>
+    </ModalPortal>
   );
-
-  return createPortal(content, document.body);
 }

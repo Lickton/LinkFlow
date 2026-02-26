@@ -11,8 +11,10 @@ interface TaskListProps {
   showCreateHint?: boolean;
   onToggleCompleted: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
+  onUpdateTask: (taskId: string, patch: Partial<Task>) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
-  onEditTask: (task: Task) => void;
+  onOpenTaskActionPicker: (task: Task) => void;
+  suspendAutoCollapse?: boolean;
 }
 
 export function TaskList({
@@ -23,11 +25,15 @@ export function TaskList({
   showCreateHint,
   onToggleCompleted,
   onDeleteTask,
+  onUpdateTask,
   onExecuteAction,
-  onEditTask,
+  onOpenTaskActionPicker,
+  suspendAutoCollapse = false,
 }: TaskListProps) {
   const [animateEmptyHint, setAnimateEmptyHint] = useState(false);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const emptySceneRef = useRef<string | null>(null);
+  const listContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (tasks.length > 0) {
@@ -46,6 +52,55 @@ export function TaskList({
     const timer = window.setTimeout(() => setAnimateEmptyHint(false), 1200);
     return () => window.clearTimeout(timer);
   }, [tasks.length, showCreateHint]);
+
+  useEffect(() => {
+    if (!expandedTaskId) {
+      return;
+    }
+    if (suspendAutoCollapse) {
+      return;
+    }
+
+    const onPointerDown = (event: MouseEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) {
+        return;
+      }
+
+      const expandedNode = listContainerRef.current?.querySelector<HTMLElement>(`[data-task-item-id="${expandedTaskId}"]`);
+      if (!expandedNode) {
+        setExpandedTaskId(null);
+        return;
+      }
+
+      if (!expandedNode.contains(target)) {
+        // Defer collapse so focused inputs/textareas can fire onBlur and commit autosave first.
+        const closingId = expandedTaskId;
+        requestAnimationFrame(() => {
+          setExpandedTaskId((current) => (current === closingId ? null : current));
+        });
+      }
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setExpandedTaskId(null);
+      }
+    };
+
+    document.addEventListener('mousedown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [expandedTaskId, suspendAutoCollapse]);
+
+  useEffect(() => {
+    if (expandedTaskId && !tasks.some((task) => task.id === expandedTaskId)) {
+      setExpandedTaskId(null);
+    }
+  }, [expandedTaskId, tasks]);
 
   if (tasks.length === 0) {
     return (
@@ -84,7 +139,7 @@ export function TaskList({
   }
 
   return (
-    <div className="h-full space-y-2.5 overflow-y-auto rounded-2xl bg-slate-100/40 p-2">
+    <div ref={listContainerRef} className="h-full space-y-0.5 overflow-y-auto px-1">
       {tasks.map((task) => {
         const list = lists.find((item) => item.id === task.listId);
         const actionSchemes = (task.actions ?? [])
@@ -95,13 +150,16 @@ export function TaskList({
           <TaskItem
             key={task.id}
             task={task}
+            isExpanded={expandedTaskId === task.id}
             actionSchemes={actionSchemes}
             list={list}
             showListInfo={showListInfo}
             onToggleCompleted={onToggleCompleted}
             onDeleteTask={onDeleteTask}
+            onUpdateTask={onUpdateTask}
             onExecuteAction={onExecuteAction}
-            onEditTask={onEditTask}
+            onOpenActionPicker={onOpenTaskActionPicker}
+            onToggleDetail={() => setExpandedTaskId((current) => (current === task.id ? null : task.id))}
           />
         );
       })}

@@ -1,7 +1,9 @@
+import { Search, X } from 'lucide-react';
+import { useEffect, useRef } from 'react';
+import type { Ref } from 'react';
 import type { List, RepeatType, Task, TaskReminder, UrlScheme } from '../../types/models';
-import { AppSelect } from '../common/AppSelect';
 import { Header } from './Header';
-import { TaskInputArea } from './TaskInputArea';
+import { TaskInputArea, type TaskInputAreaHandle } from './TaskInputArea';
 import { TaskList } from './TaskList';
 
 interface MainContentActionPreview {
@@ -40,17 +42,21 @@ interface MainContentProps {
   onDraftToggleRepeatWeekDay: (value: number) => void;
   onDraftSetRepeatMonthDays: (value: number[]) => void;
   onDraftListChange: (value: string | null) => void;
-  onSubmitTask: () => void;
+  onSubmitTask: () => void | Promise<void>;
+  onCancelDraftTask?: () => void;
   onOpenActionPicker: () => void;
   onSearchChange: (value: string) => void;
   onTaskFilterChange: (value: 'all' | 'today' | 'overdue' | 'upcoming') => void;
   onToggleCompleted: (taskId: string) => void;
   onDeleteTask: (taskId: string) => void;
+  onUpdateTask: (taskId: string, patch: Partial<Task>) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
-  onEditTask: (task: Task) => void;
+  onOpenTaskActionPicker: (task: Task) => void;
+  suspendEditorAutoCollapse?: boolean;
   showTaskInputArea?: boolean;
   contentBottomInset?: number;
   fillViewport?: boolean;
+  quickEntryRef?: Ref<TaskInputAreaHandle>;
 }
 
 export function MainContent({
@@ -72,7 +78,7 @@ export function MainContent({
   draftActions,
   draftListId,
   searchQuery,
-  taskFilter,
+  taskFilter: _taskFilter,
   onDraftTitleChange,
   onDraftDetailChange,
   onDraftDueDateChange,
@@ -84,31 +90,82 @@ export function MainContent({
   onDraftSetRepeatMonthDays,
   onDraftListChange,
   onSubmitTask,
+  onCancelDraftTask,
   onOpenActionPicker,
   onSearchChange,
-  onTaskFilterChange,
+  onTaskFilterChange: _onTaskFilterChange,
   onToggleCompleted,
   onDeleteTask,
+  onUpdateTask,
   onExecuteAction,
-  onEditTask,
+  onOpenTaskActionPicker,
+  suspendEditorAutoCollapse = false,
   showTaskInputArea = true,
   contentBottomInset = 0,
   fillViewport = false,
+  quickEntryRef,
 }: MainContentProps) {
   const subtitle = activeView === 'completed' ? '全部已完成任务' : '';
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    _onTaskFilterChange('all');
+  }, [_onTaskFilterChange]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.metaKey && !event.ctrlKey && !event.altKey && event.key.toLowerCase() === 'f') {
+        event.preventDefault();
+        requestAnimationFrame(() => {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        });
+      }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <section
-      className="flex h-full min-w-0 flex-1 flex-col bg-slate-50 p-3 sm:p-4 md:p-6"
+      className="relative flex h-full min-w-0 flex-1 flex-col bg-slate-50 p-3 sm:p-4 md:p-6"
       style={{
         paddingBottom: contentBottomInset > 0 ? `${contentBottomInset}px` : undefined,
         minHeight: fillViewport ? `calc(100dvh - ${contentBottomInset}px)` : undefined,
       }}
     >
-      <Header title={title} subtitle={subtitle} />
+      <Header
+        title={title}
+        subtitle={subtitle}
+        showDate={false}
+        rightContent={
+          <div className="flex w-[280px] items-center gap-2 rounded-xl bg-white px-3 py-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] ring-1 ring-slate-200/80">
+            <Search size={14} className="text-slate-400" />
+            <input
+              ref={searchInputRef}
+              value={searchQuery}
+              onChange={(event) => onSearchChange(event.target.value)}
+              placeholder="搜索任务"
+              className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-800 outline-none placeholder:text-slate-400"
+            />
+            {searchQuery ? (
+              <button
+                type="button"
+                onClick={() => onSearchChange('')}
+                className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                aria-label="清空搜索"
+              >
+                <X size={14} />
+              </button>
+            ) : null}
+          </div>
+        }
+      />
 
       {activeView === 'completed' || !showTaskInputArea ? null : (
         <TaskInputArea
+          ref={quickEntryRef}
           value={draftTitle}
           detail={draftDetail}
           dueDate={draftDueDate ?? null}
@@ -132,33 +189,11 @@ export function MainContent({
           onSetRepeatMonthDays={onDraftSetRepeatMonthDays}
           onSelectedListChange={onDraftListChange}
           onSubmit={onSubmitTask}
+          onCancelDraft={onCancelDraftTask}
           onOpenActionPicker={onOpenActionPicker}
+          suspendAutoCollapse={suspendEditorAutoCollapse}
         />
       )}
-
-      <div className="mb-3 rounded-xl border border-slate-200 bg-white p-3 shadow-[0_4px_14px_rgba(15,23,42,0.05)]">
-        <div className="flex flex-wrap items-center gap-2">
-          <input
-            value={searchQuery}
-            onChange={(event) => onSearchChange(event.target.value)}
-            placeholder="搜索任务标题或详情"
-            className="h-10 min-w-0 flex-1 rounded-xl border border-slate-300/80 bg-slate-50 px-3 text-sm font-medium text-slate-800 outline-none focus:border-blue-300 focus:ring-2 focus:ring-linkflow-accent/15 sm:min-w-48"
-          />
-          <AppSelect
-            value={taskFilter}
-            onChange={(value) => onTaskFilterChange(value as 'all' | 'today' | 'overdue' | 'upcoming')}
-            options={[
-              { value: 'all', label: '全部时间' },
-              { value: 'today', label: '今天' },
-              { value: 'overdue', label: '逾期' },
-              { value: 'upcoming', label: '未来' },
-            ]}
-            className="w-full sm:w-36"
-          />
-        </div>
-      </div>
-
-      <div className="mb-3 border-t border-slate-200" />
 
       <div className="min-h-0 flex-1">
         <TaskList
@@ -169,8 +204,10 @@ export function MainContent({
           showCreateHint={activeView !== 'completed'}
           onToggleCompleted={onToggleCompleted}
           onDeleteTask={onDeleteTask}
+          onUpdateTask={onUpdateTask}
           onExecuteAction={onExecuteAction}
-          onEditTask={onEditTask}
+          onOpenTaskActionPicker={onOpenTaskActionPicker}
+          suspendAutoCollapse={suspendEditorAutoCollapse}
         />
       </div>
     </section>

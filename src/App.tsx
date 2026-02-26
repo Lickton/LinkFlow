@@ -1,12 +1,12 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { isPermissionGranted } from '@tauri-apps/plugin-notification';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import { MainContent } from './components/main/MainContent';
+import type { TaskInputAreaHandle } from './components/main/TaskInputArea';
 import { ActionPickerModal } from './components/modals/ActionPickerModal';
 import { SettingsModal } from './components/modals/SettingsModal';
-import { TaskEditModal } from './components/modals/TaskEditModal';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { useAppStore } from './store/useAppStore';
 import { executeTaskAction } from './utils/actionEngine';
@@ -35,6 +35,7 @@ function App() {
     updateDraftTask,
     dispatchDraftSchedule,
     addTaskFromDraft,
+    resetDraftTask,
     toggleTaskCompleted,
     deleteTask,
     updateTask,
@@ -45,8 +46,8 @@ function App() {
     importBackup,
   } = useAppStore();
   const [isActionPickerOpen, setIsActionPickerOpen] = useState(false);
+  const [actionPickerTaskId, setActionPickerTaskId] = useState<string | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
-  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [isCreateListOpen, setIsCreateListOpen] = useState(false);
   const [newListName, setNewListName] = useState('');
   const [newListIcon, setNewListIcon] = useState('🗂️');
@@ -57,6 +58,7 @@ function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [taskFilter, setTaskFilter] = useState<'all' | 'today' | 'overdue' | 'upcoming'>('all');
   const [notificationPermissionGranted, setNotificationPermissionGranted] = useState<boolean | null>(null);
+  const quickEntryRef = useRef<TaskInputAreaHandle | null>(null);
 
   useEffect(() => {
     if (!isTauri()) {
@@ -140,7 +142,6 @@ function App() {
       };
     })
     .filter((item): item is { key: string; label: string; params: string[] } => Boolean(item));
-  const editingTask = tasks.find((task) => task.id === editingTaskId);
   const isAllTasksView = activeView === 'list' && activeListId === ALL_TASKS_LIST_ID;
 
   const baseTasks =
@@ -233,11 +234,13 @@ function App() {
       });
   };
 
-  const handleSubmitTask = () => {
-    void addTaskFromDraft(activeListId, isAllTasksView).catch((error) => {
+  const handleSubmitTask = async () => {
+    try {
+      await addTaskFromDraft(activeListId, isAllTasksView);
+    } catch (error) {
       console.error('Failed to create task', error);
       window.alert('创建任务失败，请稍后重试。');
-    });
+    }
   };
 
   const handleToggleCompleted = (taskId: string) => {
@@ -321,6 +324,8 @@ function App() {
     }
   };
 
+  const actionPickerTask = actionPickerTaskId ? tasks.find((task) => task.id === actionPickerTaskId) ?? null : null;
+
   const ensureNotificationPermissionForReminderPanel = (): boolean => {
     if (!isTauri()) {
       return true;
@@ -355,6 +360,34 @@ function App() {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [isCreateListOpen]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'n' || !event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+
+      event.preventDefault();
+
+      setIsActionPickerOpen(false);
+      setIsSettingsOpen(false);
+      setIsCreateListOpen(false);
+      setEditingList(null);
+
+      if (activeView === 'completed') {
+        setActiveView('list');
+      }
+
+      resetDraftTask();
+
+      requestAnimationFrame(() => {
+        quickEntryRef.current?.focusTitleInput();
+      });
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [activeView, resetDraftTask, setActiveView]);
 
   if (!isTauri()) {
     return (
@@ -492,22 +525,40 @@ function App() {
             }
             onDraftListChange={(value) => updateDraftTask({ listId: value })}
             onSubmitTask={handleSubmitTask}
+            onCancelDraftTask={resetDraftTask}
             onOpenActionPicker={() => setIsActionPickerOpen(true)}
+            onOpenTaskActionPicker={(task) => {
+              setActionPickerTaskId(task.id);
+              setIsActionPickerOpen(true);
+            }}
             onSearchChange={setSearchQuery}
             onTaskFilterChange={setTaskFilter}
             onToggleCompleted={handleToggleCompleted}
             onDeleteTask={handleDeleteTask}
+            onUpdateTask={handleUpdateTask}
             onExecuteAction={handleExecuteAction}
-            onEditTask={(task) => setEditingTaskId(task.id)}
+            suspendEditorAutoCollapse={isActionPickerOpen}
+            quickEntryRef={quickEntryRef}
           />
         }
       />
       <ActionPickerModal
         isOpen={isActionPickerOpen}
         schemes={schemes}
-        initialActions={draftTask.actions}
-        onClose={() => setIsActionPickerOpen(false)}
-        onConfirm={({ actions }) => updateDraftTask({ actions })}
+        initialActions={actionPickerTask?.actions ?? draftTask.actions}
+        onClose={() => {
+          setIsActionPickerOpen(false);
+          setActionPickerTaskId(null);
+        }}
+        onConfirm={({ actions }) => {
+          if (actionPickerTaskId) {
+            handleUpdateTask(actionPickerTaskId, { actions });
+          } else {
+            updateDraftTask({ actions });
+          }
+          setIsActionPickerOpen(false);
+          setActionPickerTaskId(null);
+        }}
       />
       <SettingsModal
         isOpen={isSettingsOpen}
@@ -518,12 +569,6 @@ function App() {
         onDelete={deleteScheme}
         onExportBackup={exportBackup}
         onImportBackup={importBackup}
-      />
-      <TaskEditModal
-        task={editingTask}
-        isOpen={Boolean(editingTask)}
-        onClose={() => setEditingTaskId(null)}
-        onSave={handleUpdateTask}
       />
       {isCreateListOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">

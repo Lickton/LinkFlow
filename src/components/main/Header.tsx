@@ -1,9 +1,13 @@
+import type { ReactNode } from 'react';
+
 interface HeaderProps {
   title: string;
   subtitle?: string;
+  showDate?: boolean;
+  rightContent?: ReactNode;
 }
 
-export function Header({ title, subtitle }: HeaderProps) {
+export function Header({ title, subtitle, showDate = true, rightContent }: HeaderProps) {
   const todayLabel = new Intl.DateTimeFormat('zh-CN', {
     month: 'long',
     day: 'numeric',
@@ -17,7 +21,7 @@ export function Header({ title, subtitle }: HeaderProps) {
           <h2 className="text-2xl font-bold tracking-[0.01em] text-slate-900 sm:text-3xl">{title}</h2>
           {subtitle ? <p className="mt-1 text-sm font-medium text-slate-500">{subtitle}</p> : null}
         </div>
-        <p className="shrink-0 text-xs font-medium text-slate-500 sm:text-sm">{todayLabel}</p>
+        {rightContent ?? (showDate ? <p className="shrink-0 text-xs font-medium text-slate-500 sm:text-sm">{todayLabel}</p> : null)}
       </div>
     </header>
   );

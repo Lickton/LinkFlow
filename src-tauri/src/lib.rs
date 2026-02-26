@@ -1530,6 +1530,28 @@ fn delete_task(
 }
 
 #[tauri::command]
+fn clear_completed_tasks(db: State<'_, DbState>, scheduler: State<'_, SchedulerState>) -> Result<u64, String> {
+  let conn = open_connection(&db.db_path)?;
+  let deleted = conn
+    .execute("DELETE FROM tasks WHERE completed = 1", [])
+    .map_err(|err| format!("Failed to clear completed tasks: {err}"))?;
+
+  scheduler_wakeup(&scheduler);
+  Ok(deleted as u64)
+}
+
+#[tauri::command]
+fn clear_reminder_queue(db: State<'_, DbState>, scheduler: State<'_, SchedulerState>) -> Result<u64, String> {
+  let conn = open_connection(&db.db_path)?;
+  let deleted = conn
+    .execute("DELETE FROM fired_reminders", [])
+    .map_err(|err| format!("Failed to clear reminder queue: {err}"))?;
+
+  scheduler_wakeup(&scheduler);
+  Ok(deleted as u64)
+}
+
+#[tauri::command]
 fn delete_list(db: State<'_, DbState>, list_id: String) -> Result<(), String> {
   if list_id == "list_today" {
     return Err("Default list cannot be deleted".to_string());
@@ -1591,6 +1613,8 @@ pub fn run() {
       save_task,
       toggle_task_completed,
       delete_task,
+      clear_completed_tasks,
+      clear_reminder_queue,
       delete_list
     ])
     .run(tauri::generate_context!())

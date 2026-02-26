@@ -87,6 +87,16 @@ export async function deleteTask(taskId: string): Promise<void> {
   await invoke('delete_task', { taskId });
 }
 
+export async function clearCompletedTasks(): Promise<number> {
+  ensureTauri();
+  return invoke<number>('clear_completed_tasks');
+}
+
+export async function clearReminderQueue(): Promise<number> {
+  ensureTauri();
+  return invoke<number>('clear_reminder_queue');
+}
+
 export async function deleteList(listId: string): Promise<void> {
   ensureTauri();
   await invoke('delete_list', { listId });

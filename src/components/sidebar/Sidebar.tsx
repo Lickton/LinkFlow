@@ -1,11 +1,13 @@
-import { CheckCircle2, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
+import { Archive, CalendarDays, CheckCircle2, ListTodo, Pencil, Plus, Settings, Trash2 } from 'lucide-react';
 import type { List } from '../../types/models';
+import type { ActiveView } from '../../store/useAppStore';
 
 interface SidebarProps {
   lists: List[];
   activeListId: string;
-  activeView: 'list' | 'completed';
+  activeView: ActiveView;
   onListClick: (listId: string) => void;
+  onViewClick: (view: Extract<ActiveView, 'all' | 'today' | 'someday'>) => void;
   onCreateList: () => void;
   onUpdateList: (list: List) => void;
   onDeleteList: (list: List) => void;
@@ -18,18 +20,49 @@ export function Sidebar({
   activeListId,
   activeView,
   onListClick,
+  onViewClick,
   onCreateList,
   onUpdateList,
   onDeleteList,
   onCompletedClick,
   onOpenSettings,
 }: SidebarProps) {
+  const customLists = lists.filter((list) => list.id !== 'list_today');
+
   return (
     <aside className="flex h-full w-full min-w-0 flex-col border-r border-slate-300/70 bg-slate-200 p-4">
       <h1 className="px-2 pb-4 text-xl font-bold tracking-[0.01em] text-slate-900">LinkFlow</h1>
 
+      <nav className="space-y-1">
+        {[
+          { key: 'all', label: '所有', icon: <ListTodo size={16} /> },
+          { key: 'today', label: '今天', icon: <CalendarDays size={16} /> },
+          { key: 'someday', label: '某天', icon: <Archive size={16} /> },
+        ].map((item) => {
+          const isActive = activeView === item.key;
+
+          return (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onViewClick(item.key as Extract<ActiveView, 'all' | 'today' | 'someday'>)}
+              className={`flex w-full items-center gap-2 rounded-lg border px-2 py-2 text-left text-sm transition ${
+                isActive
+                  ? 'border-blue-200 bg-white text-linkflow-accent shadow-sm'
+                  : 'border-transparent text-slate-700 hover:border-slate-200 hover:bg-white/90'
+              }`}
+            >
+              {item.icon}
+              <span className="truncate">{item.label}</span>
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="my-3 border-t border-slate-300/70" />
+
       <nav className="flex-1 space-y-1 overflow-y-auto">
-        {lists.map((list) => {
+        {customLists.map((list) => {
           const isActive = activeView === 'list' && activeListId === list.id;
 
           return (
@@ -57,16 +90,14 @@ export function Sidebar({
               >
                 <Pencil size={14} />
               </button>
-              {list.id !== 'list_today' ? (
-                <button
-                  type="button"
-                  onClick={() => onDeleteList(list)}
-                  className="rounded-md p-1 text-slate-500 transition hover:bg-red-100 hover:text-red-600"
-                  title="删除列表"
-                >
-                  <Trash2 size={14} />
-                </button>
-              ) : null}
+              <button
+                type="button"
+                onClick={() => onDeleteList(list)}
+                className="rounded-md p-1 text-slate-500 transition hover:bg-red-100 hover:text-red-600"
+                title="删除列表"
+              >
+                <Trash2 size={14} />
+              </button>
             </div>
           );
         })}

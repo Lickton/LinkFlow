@@ -1,7 +1,8 @@
 import { Search, X } from 'lucide-react';
 import { useEffect, useRef } from 'react';
-import type { Ref } from 'react';
+import type { ReactNode, Ref } from 'react';
 import type { List, RepeatType, Task, TaskReminder, UrlScheme } from '../../types/models';
+import type { ActiveView } from '../../store/useAppStore';
 import { Header } from './Header';
 import { TaskInputArea, type TaskInputAreaHandle } from './TaskInputArea';
 import { TaskList } from './TaskList';
@@ -13,8 +14,8 @@ interface MainContentActionPreview {
 }
 
 interface MainContentProps {
-  title: string;
-  activeView: 'list' | 'completed';
+  title: ReactNode;
+  activeView: ActiveView;
   isAllTasksView: boolean;
   allTasksListId: string;
   lists: List[];
@@ -52,6 +53,8 @@ interface MainContentProps {
   onUpdateTask: (taskId: string, patch: Partial<Task>) => void;
   onExecuteAction: (task: Task, actionSchemeId: string) => void;
   onOpenTaskActionPicker: (task: Task) => void;
+  onClearCompletedTasks?: () => void | Promise<void>;
+  onClearReminderQueue?: () => void | Promise<void>;
   suspendEditorAutoCollapse?: boolean;
   showTaskInputArea?: boolean;
   contentBottomInset?: number;
@@ -99,14 +102,22 @@ export function MainContent({
   onUpdateTask,
   onExecuteAction,
   onOpenTaskActionPicker,
+  onClearCompletedTasks,
+  onClearReminderQueue,
   suspendEditorAutoCollapse = false,
   showTaskInputArea = true,
   contentBottomInset = 0,
   fillViewport = false,
   quickEntryRef,
 }: MainContentProps) {
-  const subtitle = activeView === 'completed' ? '全部已完成任务' : '';
+  const subtitle =
+    activeView === 'completed'
+      ? '全部已完成任务'
+      : activeView === 'queue'
+        ? 'SQLite 提醒队列（fired_reminders）'
+        : '';
   const searchInputRef = useRef<HTMLInputElement>(null);
+  const isTaskListView = activeView !== 'queue';
 
   useEffect(() => {
     _onTaskFilterChange('all');
@@ -140,30 +151,52 @@ export function MainContent({
         subtitle={subtitle}
         showDate={false}
         rightContent={
-          <div className="flex w-[280px] items-center gap-2 rounded-xl bg-white px-3 py-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] ring-1 ring-slate-200/80">
-            <Search size={14} className="text-slate-400" />
-            <input
-              ref={searchInputRef}
-              value={searchQuery}
-              onChange={(event) => onSearchChange(event.target.value)}
-              placeholder="搜索任务"
-              className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-800 outline-none placeholder:text-slate-400"
-            />
-            {searchQuery ? (
+          <div className="flex items-center gap-2">
+            {isTaskListView ? (
+              <div className="flex w-[280px] items-center gap-2 rounded-xl bg-white px-3 py-2 shadow-[0_8px_20px_rgba(15,23,42,0.06)] ring-1 ring-slate-200/80">
+                <Search size={14} className="text-slate-400" />
+                <input
+                  ref={searchInputRef}
+                  value={searchQuery}
+                  onChange={(event) => onSearchChange(event.target.value)}
+                  placeholder="搜索任务"
+                  className="min-w-0 flex-1 bg-transparent text-sm font-medium text-slate-800 outline-none placeholder:text-slate-400"
+                />
+                {searchQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => onSearchChange('')}
+                    className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
+                    aria-label="清空搜索"
+                  >
+                    <X size={14} />
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
+            {activeView === 'completed' && onClearCompletedTasks ? (
               <button
                 type="button"
-                onClick={() => onSearchChange('')}
-                className="rounded-md p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-600"
-                aria-label="清空搜索"
+                onClick={() => void onClearCompletedTasks()}
+                className="rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-600 transition hover:bg-red-50"
               >
-                <X size={14} />
+                一键清除已完成
+              </button>
+            ) : null}
+            {activeView === 'queue' && onClearReminderQueue ? (
+              <button
+                type="button"
+                onClick={() => void onClearReminderQueue()}
+                className="rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-50"
+              >
+                清空任务队列
               </button>
             ) : null}
           </div>
         }
       />
 
-      {activeView === 'completed' || !showTaskInputArea ? null : (
+      {activeView === 'completed' || activeView === 'queue' || !showTaskInputArea ? null : (
         <TaskInputArea
           ref={quickEntryRef}
           value={draftTitle}
@@ -196,19 +229,32 @@ export function MainContent({
       )}
 
       <div className="min-h-0 flex-1">
-        <TaskList
-          tasks={visibleTasks}
-          lists={lists}
-          schemes={schemes}
-          showListInfo={isAllTasksView}
-          showCreateHint={activeView !== 'completed'}
-          onToggleCompleted={onToggleCompleted}
-          onDeleteTask={onDeleteTask}
-          onUpdateTask={onUpdateTask}
-          onExecuteAction={onExecuteAction}
-          onOpenTaskActionPicker={onOpenTaskActionPicker}
-          suspendAutoCollapse={suspendEditorAutoCollapse}
-        />
+        {activeView === 'queue' ? (
+          <div className="h-full rounded-2xl bg-slate-100/40 p-2">
+            <div className="flex h-full min-h-[240px] items-center justify-center rounded-2xl border border-slate-300/70 bg-white p-6 text-center shadow-[0_6px_18px_rgba(15,23,42,0.06)]">
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">任务队列维护</h3>
+                <p className="mt-2 text-sm font-medium text-slate-500">
+                  用于清空 SQLite 中已触发提醒记录（`fired_reminders`）。
+                </p>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <TaskList
+            tasks={visibleTasks}
+            lists={lists}
+            schemes={schemes}
+            showListInfo={isAllTasksView || activeView === 'today' || activeView === 'someday'}
+            showCreateHint={activeView !== 'completed'}
+            onToggleCompleted={onToggleCompleted}
+            onDeleteTask={onDeleteTask}
+            onUpdateTask={onUpdateTask}
+            onExecuteAction={onExecuteAction}
+            onOpenTaskActionPicker={onOpenTaskActionPicker}
+            suspendAutoCollapse={suspendEditorAutoCollapse}
+          />
+        )}
       </div>
     </section>
   );

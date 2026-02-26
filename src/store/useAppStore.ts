@@ -4,6 +4,8 @@ import {
   createList as createListInDb,
   createScheme as createSchemeInDb,
   createTask as createTaskInDb,
+  clearCompletedTasks as clearCompletedTasksInDb,
+  clearReminderQueue as clearReminderQueueInDb,
   deleteList as deleteListInDb,
   deleteScheme as deleteSchemeInDb,
   deleteTask as deleteTaskInDb,
@@ -17,7 +19,7 @@ import {
 } from '../utils/backendApi';
 import { applyScheduleInvariants, reduceSchedule, toRelativeReminder, type ScheduleAction } from '../utils/schedule';
 
-type ActiveView = 'list' | 'completed';
+export type ActiveView = 'all' | 'today' | 'someday' | 'queue' | 'list' | 'completed';
 
 interface DraftTask {
   title: string;
@@ -48,6 +50,8 @@ interface AppState {
   setActiveView: (view: ActiveView) => void;
   toggleTaskCompleted: (taskId: string) => Promise<void>;
   deleteTask: (taskId: string) => Promise<void>;
+  clearCompletedTasks: () => Promise<number>;
+  clearReminderQueue: () => Promise<number>;
   updateTask: (taskId: string, patch: Partial<Task>) => Promise<void>;
   addTaskFromDraft: (defaultListId: string, useDraftList: boolean) => Promise<void>;
   addScheme: (input: Omit<UrlScheme, 'id'>) => Promise<void>;
@@ -223,7 +227,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   tasks: [],
   schemes: [],
   activeListId: '',
-  activeView: 'list',
+  activeView: 'all',
   draftTask: initialDraftTask,
   isHydrating: false,
   isHydrated: false,
@@ -300,7 +304,18 @@ export const useAppStore = create<AppState>((set, get) => ({
             : task,
         ),
         activeListId: nextActiveListId,
-        activeView: state.activeView === 'completed' ? 'completed' : 'list',
+        activeView:
+          state.activeView === 'completed'
+            ? 'completed'
+            : state.activeView === 'queue'
+              ? 'queue'
+              : state.activeView === 'today'
+                ? 'today'
+                : state.activeView === 'someday'
+                  ? 'someday'
+                  : state.activeView === 'all'
+                    ? 'all'
+                    : 'list',
       };
     });
   },
@@ -317,6 +332,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       tasks: state.tasks.filter((task) => task.id !== taskId),
     }));
   },
+  clearCompletedTasks: async () => {
+    const deleted = await clearCompletedTasksInDb();
+    set((state) => ({
+      tasks: state.tasks.filter((task) => !task.completed),
+    }));
+    return deleted;
+  },
+  clearReminderQueue: async () => clearReminderQueueInDb(),
   updateTask: async (taskId, patch) => {
     const existing = get().tasks.find((task) => task.id === taskId);
     if (!existing) {
@@ -431,7 +454,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         state.activeListId && snapshot.lists.some((list) => list.id === state.activeListId)
           ? state.activeListId
           : (snapshot.lists[0]?.id ?? ''),
-      activeView: 'list',
+      activeView: 'all',
       draftTask: initialDraftTask,
     }));
   },

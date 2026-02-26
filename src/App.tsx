@@ -1,19 +1,48 @@
 import { isTauri } from '@tauri-apps/api/core';
 import { isPermissionGranted } from '@tauri-apps/plugin-notification';
 import { open as openExternal } from '@tauri-apps/plugin-shell';
+import { Archive, CalendarDays, CheckCircle2, ListTodo } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import type { ReactNode } from 'react';
 import { AppLayout } from './components/layout/AppLayout';
 import { MainContent } from './components/main/MainContent';
 import type { TaskInputAreaHandle } from './components/main/TaskInputArea';
 import { ActionPickerModal } from './components/modals/ActionPickerModal';
 import { SettingsModal } from './components/modals/SettingsModal';
 import { Sidebar } from './components/sidebar/Sidebar';
-import { useAppStore } from './store/useAppStore';
+import { useAppStore, type ActiveView } from './store/useAppStore';
 import { executeTaskAction } from './utils/actionEngine';
 import type { List, Task } from './types/models';
 
 const ALL_TASKS_LIST_ID = 'list_today';
 const isMacDesktop = () => /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
+const BUSINESS_DAY_START_TIME = '03:00';
+
+function formatLocalDate(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function shiftDateString(value: string, days: number): string {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  date.setDate(date.getDate() + days);
+  return formatLocalDate(date);
+}
+
+function getBusinessDayKeyForTask(task: Pick<Task, 'dueDate' | 'time'>): string | null {
+  if (!task.dueDate) {
+    return null;
+  }
+  if (!task.time) {
+    return task.dueDate;
+  }
+  return task.time < BUSINESS_DAY_START_TIME ? shiftDateString(task.dueDate, -1) : task.dueDate;
+}
 
 function App() {
   const {
@@ -38,6 +67,8 @@ function App() {
     resetDraftTask,
     toggleTaskCompleted,
     deleteTask,
+    clearCompletedTasks,
+    clearReminderQueue,
     updateTask,
     addScheme,
     updateScheme,
@@ -142,17 +173,32 @@ function App() {
       };
     })
     .filter((item): item is { key: string; label: string; params: string[] } => Boolean(item));
-  const isAllTasksView = activeView === 'list' && activeListId === ALL_TASKS_LIST_ID;
-
-  const baseTasks =
-    activeView === 'completed'
-      ? tasks.filter((task) => task.completed)
-      : isAllTasksView
-        ? tasks.filter((task) => !task.completed)
-        : tasks.filter((task) => task.listId === activeListId && !task.completed);
-
-  const todayDate = new Date().toISOString().slice(0, 10);
+  const now = new Date();
+  const todayDate = formatLocalDate(now);
+  const isAllTasksView = activeView === 'all';
   const normalizedKeyword = searchQuery.trim().toLowerCase();
+
+  const baseTasks = tasks.filter((task) => {
+    if (activeView === 'completed') {
+      return task.completed;
+    }
+    if (activeView === 'queue') {
+      return false;
+    }
+    if (task.completed) {
+      return false;
+    }
+    if (activeView === 'all') {
+      return true;
+    }
+    if (activeView === 'today') {
+      return getBusinessDayKeyForTask(task) === todayDate;
+    }
+    if (activeView === 'someday') {
+      return !task.dueDate;
+    }
+    return task.listId === activeListId;
+  });
 
   const visibleTasks = baseTasks.filter((task) => {
     if (normalizedKeyword) {
@@ -162,7 +208,7 @@ function App() {
       }
     }
 
-    if (activeView === 'completed') {
+    if (activeView === 'completed' || activeView === 'queue') {
       return true;
     }
 
@@ -204,7 +250,28 @@ function App() {
     return 0;
   });
 
-  const title = activeView === 'completed' ? '✅ 已完成' : activeList?.name ?? '列表';
+  const titleByView: Partial<Record<ActiveView, string>> = {
+    all: '所有',
+    today: '今天',
+    someday: '某天',
+    queue: '任务队列',
+    completed: '已完成',
+  };
+  const titleIconByView: Partial<Record<ActiveView, ReactNode>> = {
+    all: <ListTodo size={28} className="text-slate-600" strokeWidth={2} />,
+    today: <CalendarDays size={28} className="text-slate-600" strokeWidth={2} />,
+    someday: <Archive size={28} className="text-slate-600" strokeWidth={2} />,
+    completed: <CheckCircle2 size={28} className="text-slate-600" strokeWidth={2} />,
+  };
+  const titleText = titleByView[activeView] ?? activeList?.name ?? '列表';
+  const title = titleIconByView[activeView] ? (
+    <span className="inline-flex items-center gap-3">
+      {titleIconByView[activeView]}
+      <span>{titleText}</span>
+    </span>
+  ) : (
+    titleText
+  );
 
   const handleCreateList = () => {
     setNewListName('');
@@ -375,7 +442,7 @@ function App() {
       setEditingList(null);
 
       if (activeView === 'completed') {
-        setActiveView('list');
+        setActiveView('all');
       }
 
       resetDraftTask();
@@ -413,6 +480,35 @@ function App() {
     );
   }
 
+  const handleClearCompletedTasks = () => {
+    if (!tasks.some((task) => task.completed)) {
+      window.alert('当前没有已完成任务可清除。');
+      return;
+    }
+    if (!window.confirm('确认清除所有已完成任务吗？此操作不可撤销。')) {
+      return;
+    }
+    void clearCompletedTasks()
+      .catch((error) => {
+        console.error('Failed to clear completed tasks', error);
+        window.alert('清除已完成任务失败，请稍后重试。');
+      });
+  };
+
+  const handleClearReminderQueue = () => {
+    if (!window.confirm('确认清空 SQLite 任务队列（已触发提醒记录）吗？')) {
+      return;
+    }
+    void clearReminderQueue()
+      .then((count) => {
+        window.alert(`已清空 ${count} 条队列记录。`);
+      })
+      .catch((error) => {
+        console.error('Failed to clear reminder queue', error);
+        window.alert('清空任务队列失败，请稍后重试。');
+      });
+  };
+
   return (
     <>
       <AppLayout
@@ -422,6 +518,7 @@ function App() {
             activeListId={activeListId}
             activeView={activeView}
             onListClick={setActiveList}
+            onViewClick={setActiveView}
             onCreateList={handleCreateList}
             onUpdateList={handleUpdateList}
             onDeleteList={handleDeleteList}
@@ -531,6 +628,8 @@ function App() {
               setActionPickerTaskId(task.id);
               setIsActionPickerOpen(true);
             }}
+            onClearCompletedTasks={handleClearCompletedTasks}
+            onClearReminderQueue={handleClearReminderQueue}
             onSearchChange={setSearchQuery}
             onTaskFilterChange={setTaskFilter}
             onToggleCompleted={handleToggleCompleted}

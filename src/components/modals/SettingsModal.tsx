@@ -4,7 +4,7 @@ import { isTauri } from '@tauri-apps/api/core';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { AppSelect } from '../common/AppSelect';
 import type { UrlScheme } from '../../types/models';
-import { ModalHeader, ModalPortal } from './ModalPrimitives';
+import { ModalHeader, ModalPortal, ModalPrimaryButton, ModalSecondaryButton } from './ModalPrimitives';
 
 type SchemeDraft = Omit<UrlScheme, 'id'>;
 
@@ -320,21 +320,15 @@ export function SettingsModal({
             </div>
 
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={onClose}
-                className="rounded-lg px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100"
-              >
+              <ModalSecondaryButton onClick={onClose}>
                 取消
-              </button>
-              <button
-                type="button"
+              </ModalSecondaryButton>
+              <ModalPrimaryButton
                 disabled={!isValid || isSubmitting}
                 onClick={() => void handleSave()}
-                className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 {isSubmitting ? '保存中...' : '保存'}
-              </button>
+              </ModalPrimaryButton>
             </div>
           </div>
           {savedNotice ? <p className="mt-2 text-right text-xs text-green-600">{savedNotice}</p> : null}

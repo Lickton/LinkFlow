@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import type { ReactNode } from 'react';
+import type { ButtonHTMLAttributes, HTMLAttributes, ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 
 interface ModalPortalProps {
@@ -9,6 +9,14 @@ interface ModalPortalProps {
 interface ModalHeaderProps {
   title: ReactNode;
   onClose: () => void;
+}
+
+interface ModalFooterProps extends HTMLAttributes<HTMLDivElement> {
+  children: ReactNode;
+}
+
+interface ModalButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  children: ReactNode;
 }
 
 export function ModalPortal({ children }: ModalPortalProps) {
@@ -30,5 +38,37 @@ export function ModalHeader({ title, onClose }: ModalHeaderProps) {
         <X size={16} />
       </button>
     </div>
+  );
+}
+
+export function ModalFooter({ children, className = '', ...props }: ModalFooterProps) {
+  return (
+    <div className={`mt-5 flex items-center justify-end gap-2 ${className}`} {...props}>
+      {children}
+    </div>
+  );
+}
+
+export function ModalSecondaryButton({ children, type = 'button', className = '', ...props }: ModalButtonProps) {
+  return (
+    <button
+      type={type}
+      className={`rounded-lg px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100 ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
+  );
+}
+
+export function ModalPrimaryButton({ children, type = 'button', className = '', ...props }: ModalButtonProps) {
+  return (
+    <button
+      type={type}
+      className={`rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+      {...props}
+    >
+      {children}
+    </button>
   );
 }

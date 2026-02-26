@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { TaskActionBinding, UrlScheme } from '../../types/models';
-import { ModalHeader, ModalPortal } from './ModalPrimitives';
+import { ModalFooter, ModalHeader, ModalPortal, ModalPrimaryButton, ModalSecondaryButton } from './ModalPrimitives';
 
 interface ActionPickerModalProps {
   isOpen: boolean;
@@ -239,16 +239,11 @@ export function ActionPickerModal({
           </section>
         </div>
 
-        <div className="mt-5 flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-lg px-3 py-2 text-sm text-gray-500 transition hover:bg-gray-100"
-          >
+        <ModalFooter>
+          <ModalSecondaryButton onClick={onClose}>
             取消
-          </button>
-          <button
-            type="button"
+          </ModalSecondaryButton>
+          <ModalPrimaryButton
             onClick={() => {
               onConfirm({
                 actions: selectedActions,
@@ -256,11 +251,10 @@ export function ActionPickerModal({
               onClose();
             }}
             disabled={confirmDisabled}
-            className="rounded-lg bg-linkflow-accent px-3 py-2 text-sm text-white transition enabled:hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             确认
-          </button>
-        </div>
+          </ModalPrimaryButton>
+        </ModalFooter>
       </div>
     </ModalPortal>
   );

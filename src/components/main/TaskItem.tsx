@@ -6,6 +6,7 @@ import {
   TaskRoundCheckbox,
 } from './TaskCardPrimitives';
 import { TaskScheduleToolbar } from './TaskScheduleToolbar';
+import { toggleNumberSelection } from './taskScheduleShared';
 
 interface TaskItemProps {
   task: Task;
@@ -178,6 +179,7 @@ export function TaskItem({
   };
 
   const applyRepeatDraft = (next: Pick<EditDraft, 'repeatType' | 'repeatDaysOfWeek' | 'repeatDaysOfMonth'>) => {
+    draftRef.current = { ...draftRef.current, ...next };
     setDraft((prev) => ({ ...prev, ...next }));
     if (next.repeatType === 'none') {
       commitPatch({ repeat: null });
@@ -334,7 +336,7 @@ export function TaskItem({
                   }
                   onToggleRepeatWeekDay={(day) => {
                     const current = draftRef.current.repeatDaysOfWeek;
-                    const next = current.includes(day) ? current.filter((item) => item !== day) : [...current, day];
+                    const next = toggleNumberSelection(current, day);
                     applyRepeatDraft({
                       repeatType: 'weekly',
                       repeatDaysOfWeek: next,

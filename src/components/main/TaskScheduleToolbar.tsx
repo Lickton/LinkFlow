@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import type { RepeatType, TaskReminder } from '../../types/models';
 import { toRelativeReminder } from '../../utils/schedule';
 import { TaskControlPopover, TaskInlineToolbarButtonChip, TaskInlineToolbarChip } from './TaskCardPrimitives';
+import { toggleNumberSelection } from './taskScheduleShared';
 
 type ToolbarMode = 'create' | 'edit';
 
@@ -148,6 +149,33 @@ function getRepeatSummaryLabel(repeatType: RepeatValue, week: number[], month: n
   return `每月${month.join('/') || '-'}号`;
 }
 
+function useDismissiblePanel(
+  open: boolean,
+  panelRef: React.RefObject<HTMLDivElement>,
+  onClose: () => void,
+) {
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (panelRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('keydown', onKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open, onClose, panelRef]);
+}
+
 export function TaskScheduleToolbar({
   mode,
   dueDate,
@@ -174,8 +202,10 @@ export function TaskScheduleToolbar({
 }: TaskScheduleToolbarProps) {
   const [activePanel, setActivePanel] = useState<'repeat' | null>(null);
   const [isListMenuOpen, setIsListMenuOpen] = useState(false);
+  const [repeatMonthDaysInput, setRepeatMonthDaysInput] = useState('');
   const repeatPanelRef = useRef<HTMLDivElement>(null);
   const listMenuRef = useRef<HTMLDivElement>(null);
+  const repeatMonthDaysInputRef = useRef<HTMLInputElement>(null);
   const lastEnabledTimeRef = useRef<string>('09:00');
   const lastEnabledRepeatRef = useRef<{
     repeatType: RepeatType;
@@ -215,42 +245,17 @@ export function TaskScheduleToolbar({
   }, [repeatType, repeatDaysOfWeek, repeatDaysOfMonth]);
 
   useEffect(() => {
-    if (!activePanel) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (repeatPanelRef.current?.contains(target)) return;
-      setActivePanel(null);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setActivePanel(null);
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [activePanel]);
+    if (repeatType !== 'monthly') {
+      return;
+    }
+    if (document.activeElement === repeatMonthDaysInputRef.current) {
+      return;
+    }
+    setRepeatMonthDaysInput(repeatDaysOfMonth.join(','));
+  }, [repeatType, repeatDaysOfMonth]);
 
-  useEffect(() => {
-    if (!isListMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      const target = event.target;
-      if (!(target instanceof Node)) return;
-      if (listMenuRef.current?.contains(target)) return;
-      setIsListMenuOpen(false);
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setIsListMenuOpen(false);
-    };
-    window.addEventListener('pointerdown', onPointerDown);
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.removeEventListener('pointerdown', onPointerDown);
-      window.removeEventListener('keydown', onKeyDown);
-    };
-  }, [isListMenuOpen]);
+  useDismissiblePanel(Boolean(activePanel), repeatPanelRef, () => setActivePanel(null));
+  useDismissiblePanel(isListMenuOpen, listMenuRef, () => setIsListMenuOpen(false));
 
   const toggleDateEnabled = () => {
     if (dateEnabled) {
@@ -549,11 +554,7 @@ export function TaskScheduleToolbar({
                             key={day}
                             type="button"
                             onClick={() => {
-                              if (active) {
-                                onSetRepeatMonthDays(repeatDaysOfMonth.filter((item) => item !== day));
-                              } else {
-                                onSetRepeatMonthDays([...repeatDaysOfMonth, day]);
-                              }
+                              onSetRepeatMonthDays(toggleNumberSelection(repeatDaysOfMonth, day));
                             }}
                             className={`rounded-md px-2 py-1 text-xs transition ${
                               active ? 'bg-linkflow-accent text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
@@ -567,15 +568,19 @@ export function TaskScheduleToolbar({
                     <label className="flex items-center gap-2 text-xs text-slate-400">
                       自定义
                       <input
-                        value={repeatDaysOfMonth.join(',')}
+                        ref={repeatMonthDaysInputRef}
+                        value={repeatMonthDaysInput}
                         onChange={(event) => {
-                          const parsed = event.target.value
-                            .split(',')
+                          const raw = event.target.value;
+                          setRepeatMonthDaysInput(raw);
+                          const parsed = raw
+                            .split(/[,，]/)
                             .map((item) => Number(item.trim()))
                             .filter((item) => Number.isInteger(item) && item >= 1 && item <= 31);
                           const unique = Array.from(new Set(parsed)).sort((a, b) => a - b);
                           onSetRepeatMonthDays(unique);
                         }}
+                        onBlur={() => setRepeatMonthDaysInput(repeatDaysOfMonth.join(','))}
                         className="flex-1 rounded-lg border border-slate-200 px-2 py-1 text-xs text-slate-700 outline-none focus:ring-2 focus:ring-linkflow-accent/15"
                         placeholder="1,15,28"
                       />

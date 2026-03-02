@@ -181,17 +181,6 @@ export function TaskItem({
   const applyRepeatDraft = (next: Pick<EditDraft, 'repeatType' | 'repeatDaysOfWeek' | 'repeatDaysOfMonth'>) => {
     draftRef.current = { ...draftRef.current, ...next };
     setDraft((prev) => ({ ...prev, ...next }));
-    if (next.repeatType === 'none') {
-      commitPatch({ repeat: null });
-      return;
-    }
-    commitPatch({
-      repeat: {
-        type: next.repeatType,
-        ...(next.repeatType === 'weekly' ? { dayOfWeek: next.repeatDaysOfWeek } : {}),
-        ...(next.repeatType === 'monthly' ? { dayOfMonth: next.repeatDaysOfMonth } : {}),
-      },
-    });
   };
 
   const setTaskList = (nextListId: string | undefined) => {
@@ -303,7 +292,6 @@ export function TaskItem({
                     };
                     draftRef.current = nextDraft;
                     setDraft(nextDraft);
-                    commitPatch({ dueDate: value, reminder: nextReminderEnabled ? toRelativeReminder(nextDraft.reminderMinutes) : null });
                   }}
                   onTimeChange={(value) => {
                     const nextTime = value ?? '';
@@ -315,7 +303,6 @@ export function TaskItem({
                     };
                     draftRef.current = nextDraft;
                     setDraft(nextDraft);
-                    commitPatch({ time: value, reminder: nextReminderEnabled ? toRelativeReminder(nextDraft.reminderMinutes) : null });
                   }}
                   onReminderChange={(value) => {
                     const nextDraft = {
@@ -325,7 +312,6 @@ export function TaskItem({
                     };
                     draftRef.current = nextDraft;
                     setDraft(nextDraft);
-                    commitPatch({ reminder: value });
                   }}
                   onRepeatTypeChange={(value) =>
                     applyRepeatDraft({

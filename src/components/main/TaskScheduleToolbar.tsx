@@ -55,68 +55,6 @@ function todayDateString() {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
-function shiftDate(value: string, deltaDays: number): string | null {
-  if (!value) return null;
-  const date = new Date(`${value}T00:00:00`);
-  if (Number.isNaN(date.getTime())) return null;
-  date.setDate(date.getDate() + deltaDays);
-  return date.toISOString().slice(0, 10);
-}
-
-function daysInMonth(year: number, month1to12: number): number {
-  return new Date(year, month1to12, 0).getDate();
-}
-
-function shiftDateSegment(value: string, segment: 'year' | 'month' | 'day', delta: number): string | null {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
-  let [year, month, day] = value.split('-').map(Number);
-  if (!year || !month || !day) return null;
-  if (segment === 'day') return shiftDate(value, delta);
-  if (segment === 'month') {
-    const zeroBased = month - 1 + delta;
-    year += Math.floor(zeroBased / 12);
-    month = ((zeroBased % 12) + 12) % 12 + 1;
-    day = Math.min(day, daysInMonth(year, month));
-    return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-  }
-  year += delta;
-  day = Math.min(day, daysInMonth(year, month));
-  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-}
-
-function shiftTimeSegment(value: string, segment: 'hour' | 'minute', delta: number): string | null {
-  if (!/^\d{2}:\d{2}$/.test(value)) return null;
-  const [rawH, rawM] = value.split(':').map(Number);
-  if (!Number.isInteger(rawH) || !Number.isInteger(rawM)) return null;
-  let h = rawH;
-  let m = rawM;
-  if (segment === 'hour') h = ((h + delta) % 24 + 24) % 24;
-  else m = ((m + delta) % 60 + 60) % 60;
-  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
-}
-
-function getCaretSegmentForDate(input: HTMLInputElement): 'year' | 'month' | 'day' {
-  try {
-    const pos = input.selectionStart;
-    if (pos == null) return 'day';
-    if (pos <= 4) return 'year';
-    if (pos <= 7) return 'month';
-    return 'day';
-  } catch {
-    return 'day';
-  }
-}
-
-function getCaretSegmentForTime(input: HTMLInputElement): 'hour' | 'minute' {
-  try {
-    const pos = input.selectionStart;
-    if (pos == null) return 'minute';
-    return pos <= 2 ? 'hour' : 'minute';
-  } catch {
-    return 'minute';
-  }
-}
-
 function isAllowedEditorControlKey(event: React.KeyboardEvent<HTMLInputElement>): boolean {
   if (event.metaKey || event.ctrlKey || event.altKey) return true;
   return [
@@ -132,14 +70,6 @@ function isAllowedEditorControlKey(event: React.KeyboardEvent<HTMLInputElement>)
     'Home',
     'End',
   ].includes(event.key);
-}
-
-function getStepDelta(event: React.KeyboardEvent<HTMLInputElement>): -1 | 1 | null {
-  if (event.code === 'Minus' || event.code === 'NumpadSubtract') return -1;
-  if (event.code === 'Equal' || event.code === 'NumpadAdd') return 1;
-  if (event.key === '-') return -1;
-  if (event.key === '=' || event.key === '+') return 1;
-  return null;
 }
 
 function getRepeatSummaryLabel(repeatType: RepeatValue, week: number[], month: number[]) {
@@ -312,56 +242,19 @@ export function TaskScheduleToolbar({
   const modeAttr = mode; // mark prop as used for now; can branch styles later.
   void modeAttr;
 
-  const withStepKeys =
-    (kind: 'date' | 'time' | 'reminder') => (event: React.KeyboardEvent<HTMLInputElement>) => {
-      const delta = getStepDelta(event);
-      if (delta == null) return;
-      event.preventDefault();
-      event.stopPropagation();
-
-      if (kind === 'date') {
-        const base = dueDate ?? '';
-        const next = shiftDateSegment(base, getCaretSegmentForDate(event.currentTarget), delta);
-        if (!next) return;
-        onDueDateChange(next);
-        return;
-      }
-
-      if (kind === 'time') {
-        const base = time || '09:00';
-        const next = shiftTimeSegment(base, getCaretSegmentForTime(event.currentTarget), delta);
-        if (!next) return;
-        onTimeChange(next);
-        return;
-      }
-
-      if (!canUseReminder && !reminder) {
-        return;
-      }
-      const currentMinutes = reminder?.type === 'relative' ? reminder.offsetMinutes : reminderOffsetMinutes;
-      const nextMinutes = Math.max(0, currentMinutes + delta);
-      if (!reminder) {
-        onReminderChange(toRelativeReminder(nextMinutes));
-        return;
-      }
-      onReminderChange(toRelativeReminder(nextMinutes));
-    };
-
   const restrictInlineMetaInputKeys = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (isAllowedEditorControlKey(event)) return;
     if (/^\d$/.test(event.key)) return;
-    if (getStepDelta(event) != null) return;
     event.preventDefault();
     event.stopPropagation();
   };
 
-  const withRestrictedStepKeys =
-    (kind: 'date' | 'time' | 'reminder') => (event: React.KeyboardEvent<HTMLInputElement>) => {
-      withStepKeys(kind)(event);
-      if (!event.defaultPrevented) {
-        restrictInlineMetaInputKeys(event);
-      }
-    };
+  const preventDateTimeEraseKeys = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.key === 'Backspace' || event.key === 'Delete') {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  };
 
   return (
     <div className="space-y-2.5 pb-1">
@@ -385,7 +278,12 @@ export function TaskScheduleToolbar({
             type="date"
             value={dueDate ?? ''}
             onChange={(event) => onDueDateChange(event.target.value || null)}
-            onKeyDown={withRestrictedStepKeys('date')}
+            onKeyDown={(event) => {
+              preventDateTimeEraseKeys(event);
+              if (!event.defaultPrevented) {
+                restrictInlineMetaInputKeys(event);
+              }
+            }}
             onPaste={(event) => event.preventDefault()}
             className={`min-w-0 bg-transparent text-[12px] font-medium outline-none ${dueDate ? 'text-slate-600' : 'text-slate-500'}`}
           />
@@ -420,7 +318,10 @@ export function TaskScheduleToolbar({
                 event.stopPropagation();
                 return;
               }
-              withRestrictedStepKeys('time')(event);
+              preventDateTimeEraseKeys(event);
+              if (!event.defaultPrevented) {
+                restrictInlineMetaInputKeys(event);
+              }
             }}
             onPaste={(event) => event.preventDefault()}
             className={`w-[62px] bg-transparent text-[12px] font-medium outline-none ${timeEnabled ? 'text-slate-600' : 'text-slate-500'}`}
@@ -460,7 +361,7 @@ export function TaskScheduleToolbar({
               const next = digitsOnly ? Math.max(0, Number(digitsOnly)) : 0;
               onReminderChange(toRelativeReminder(next));
             }}
-            onKeyDown={withRestrictedStepKeys('reminder')}
+            onKeyDown={restrictInlineMetaInputKeys}
             onPaste={(event) => event.preventDefault()}
             className={`w-9 bg-transparent text-[12px] font-medium outline-none ${
               reminder ? 'text-slate-600' : 'cursor-not-allowed text-slate-400'

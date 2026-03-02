@@ -12,7 +12,7 @@ import { SettingsModal } from './components/modals/SettingsModal';
 import { Sidebar } from './components/sidebar/Sidebar';
 import { useAppStore, type ActiveView } from './store/useAppStore';
 import { executeTaskAction } from './utils/actionEngine';
-import type { List, Task } from './types/models';
+import type { List, RepeatRule, Task } from './types/models';
 
 const ALL_TASKS_LIST_ID = 'list_today';
 const isMacDesktop = () => /Macintosh|Mac OS X/i.test(window.navigator.userAgent);
@@ -42,6 +42,67 @@ function getBusinessDayKeyForTask(task: Pick<Task, 'dueDate' | 'time'>): string 
     return task.dueDate;
   }
   return task.time < BUSINESS_DAY_START_TIME ? shiftDateString(task.dueDate, -1) : task.dueDate;
+}
+
+function getWeekdayIndexMondayFirst(value: string): number | null {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  // JS getDay: 0=Sun..6=Sat -> convert to 0=Mon..6=Sun
+  return (date.getDay() + 6) % 7;
+}
+
+function getDayOfMonth(value: string): number | null {
+  const date = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+  return date.getDate();
+}
+
+function isRepeatRuleMatchingDate(repeat: RepeatRule | null | undefined, date: string): boolean {
+  if (!repeat) {
+    return false;
+  }
+
+  if (repeat.type === 'daily') {
+    return true;
+  }
+
+  if (repeat.type === 'weekly') {
+    const day = getWeekdayIndexMondayFirst(date);
+    if (day === null) {
+      return false;
+    }
+    const days = repeat.dayOfWeek ?? [];
+    // Backward compatible if historical data stores Sunday as 7.
+    const sundayAsSeven = day === 6 ? 7 : day;
+    return days.includes(day) || days.includes(sundayAsSeven);
+  }
+
+  if (repeat.type === 'monthly') {
+    const monthDay = getDayOfMonth(date);
+    if (monthDay === null) {
+      return false;
+    }
+    return (repeat.dayOfMonth ?? []).includes(monthDay);
+  }
+
+  return false;
+}
+
+function isTaskDueOnBusinessDay(task: Task, businessDayKey: string): boolean {
+  if (getBusinessDayKeyForTask(task) === businessDayKey) {
+    return true;
+  }
+  if (!task.repeat) {
+    return false;
+  }
+
+  // For early-morning tasks (<03:00), the business day is the previous day.
+  const repeatMatchDate = task.time && task.time < BUSINESS_DAY_START_TIME ? shiftDateString(businessDayKey, 1) : businessDayKey;
+  return isRepeatRuleMatchingDate(task.repeat, repeatMatchDate);
 }
 
 function App() {
@@ -192,7 +253,7 @@ function App() {
       return true;
     }
     if (activeView === 'today') {
-      return getBusinessDayKeyForTask(task) === todayDate;
+      return isTaskDueOnBusinessDay(task, todayDate);
     }
     if (activeView === 'someday') {
       return !task.dueDate;
@@ -213,7 +274,7 @@ function App() {
     }
 
     if (taskFilter === 'today') {
-      return task.dueDate === todayDate;
+      return isTaskDueOnBusinessDay(task, todayDate);
     }
     if (taskFilter === 'overdue') {
       return Boolean(task.dueDate) && (task.dueDate ?? '') < todayDate;
@@ -307,6 +368,7 @@ function App() {
     } catch (error) {
       console.error('Failed to create task', error);
       window.alert('创建任务失败，请稍后重试。');
+      throw error;
     }
   };
 

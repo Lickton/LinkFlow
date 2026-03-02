@@ -209,10 +209,16 @@ export const TaskInputArea = forwardRef<TaskInputAreaHandle, TaskInputAreaProps>
     if (!canSubmit) {
       return;
     }
-    void Promise.resolve(onSubmit()).finally(() => {
-      setIsExpanded(true);
-      focusTitleSoon();
-    });
+    void Promise.resolve(onSubmit())
+      .then(() => {
+        closeQuickEntry();
+        requestAnimationFrame(() => {
+          launcherButtonRef.current?.focus();
+        });
+      })
+      .catch(() => {
+        focusTitleSoon();
+      });
   };
 
   return (

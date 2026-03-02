@@ -74,10 +74,22 @@ export function TaskList({
       }
 
       if (!expandedNode.contains(target)) {
-        // Defer collapse so focused inputs/textareas can fire onBlur and commit autosave first.
+        const clickedTaskNode =
+          target instanceof Element ? target.closest<HTMLElement>('[data-task-item-id]') : null;
+        const clickedTaskId = clickedTaskNode?.dataset.taskItemId ?? null;
+
+        // Defer transition so focused inputs/textareas can fire onBlur and commit autosave first.
         const closingId = expandedTaskId;
         requestAnimationFrame(() => {
-          setExpandedTaskId((current) => (current === closingId ? null : current));
+          setExpandedTaskId((current) => {
+            if (current !== closingId) {
+              return current;
+            }
+            if (clickedTaskId && clickedTaskId !== closingId) {
+              return clickedTaskId;
+            }
+            return null;
+          });
         });
       }
     };
